@@ -78,6 +78,14 @@ function Toast({ msg }) {
   return <div className="toast">✅ {msg}</div>;
 }
 
+const formatDateToISO = (dateStr) => {
+  if (!dateStr || String(dateStr).trim() === '') return '';
+  try {
+    const d = new Date(dateStr);
+    return !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : '';
+  } catch { return ''; }
+};
+
 export default function CreateUniversity() {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -131,9 +139,9 @@ export default function CreateUniversity() {
           setUniType(u.type || 'Public');
           setInternational(u.internationalStudents || false);
           setAppFees(u.applicationFees || '');
-          setDeadline(u.deadline ? new Date(u.deadline).toISOString().split('T')[0] : '');
-          setTestDate(u.testDate ? new Date(u.testDate).toISOString().split('T')[0] : '');
-          setInterviewDate(u.interviewDate ? new Date(u.interviewDate).toISOString().split('T')[0] : '');
+          setDeadline(formatDateToISO(u.deadline));
+          setTestDate(formatDateToISO(u.testDate));
+          setInterviewDate(formatDateToISO(u.interviewDate));
           setWebsite(u.website || '');
           setEligibility(u.eligibility || '');
           setScholarshipDetails(u.scholarshipDetails || '');

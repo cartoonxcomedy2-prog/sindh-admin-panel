@@ -76,6 +76,14 @@ function Toast({ msg }) {
   return <div className="toast">✅ {msg}</div>;
 }
 
+const formatDateToISO = (dateStr) => {
+  if (!dateStr || String(dateStr).trim() === '') return '';
+  try {
+    const d = new Date(dateStr);
+    return !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : '';
+  } catch { return ''; }
+};
+
 export default function CreateScholarship() {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -132,7 +140,7 @@ export default function CreateScholarship() {
           setCity(s.city || '');
           setSchType(s.type || 'Public');
           setCoverage(s.coverage || []);
-          setDeadline(s.deadline ? new Date(s.deadline).toISOString().split('T')[0] : '');
+          setDeadline(formatDateToISO(s.deadline));
           setMinPercentage(s.eligibility?.minPercentage || '');
           setMinGrade(s.eligibility?.minGrade || '');
           setEligibilityDesc(s.eligibility?.description || '');
@@ -144,8 +152,8 @@ export default function CreateScholarship() {
             : [];
           setContactInfo(contacts.length > 0 ? contacts : [emptyContact()]);
           setContact(s.contact || '');
-          setTestDate(s.testDate ? new Date(s.testDate).toISOString().split('T')[0] : '');
-          setInterviewDate(s.interviewDate ? new Date(s.interviewDate).toISOString().split('T')[0] : '');
+          setTestDate(formatDateToISO(s.testDate));
+          setInterviewDate(formatDateToISO(s.interviewDate));
           setDuration(s.duration || '');
           setAmount(s.amount || '');
           setProvider(s.provider || '');
