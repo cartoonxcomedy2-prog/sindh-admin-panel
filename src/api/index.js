@@ -13,8 +13,25 @@ API.interceptors.request.use((req) => {
   return req;
 });
 
+// Add a response interceptor to handle token expiration or unauthorized access
+API.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response && error.response.status === 401) {
+      // Clear session only if we are not on the login page (to avoid infinite loops)
+      if (!window.location.pathname.includes('/login')) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('admin');
+        window.location.href = '/'; 
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 // Auth
 export const login = (formData) => API.post('/users/login', formData);
+export const fetchProfile = () => API.get('/users/profile');
 
 // Users
 export const fetchUsers = () => API.get('/users');

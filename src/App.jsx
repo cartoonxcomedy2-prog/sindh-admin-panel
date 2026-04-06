@@ -20,28 +20,36 @@ import AdminApplications from './pages/AdminApplications';
 import Accounts from './pages/Accounts';
 import AdminDashboard from './pages/AdminDashboard'; // Integrated Overview Page
 import Login from './pages/Login'; // Unified Login Page
+import { fetchProfile } from './api';
 
 function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
-  const [admin, setAdmin] = useState(JSON.parse(localStorage.getItem('admin') || '{}'));
+  const [isAuthenticated, setIsAuthenticated] = useState(!!(localStorage.getItem('token') || sessionStorage.getItem('token')));
+  const [admin, setAdmin] = useState(JSON.parse(localStorage.getItem('admin') || sessionStorage.getItem('admin') || '{}'));
 
   useEffect(() => {
-    // Sync auth state
-    const token = localStorage.getItem('token');
-    const storedAdmin = localStorage.getItem('admin');
+    // Sync auth state and VERIFY with server on load
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+    const storedAdmin = localStorage.getItem('admin') || sessionStorage.getItem('admin');
+    
     if (token && storedAdmin) {
       setIsAuthenticated(true);
       setAdmin(JSON.parse(storedAdmin));
+      
+      // Verify token is still valid with server
+      fetchProfile().catch(() => {
+        // If profile fetch fails (e.g. 401), logout automatically
+        handleLogout();
+      });
     }
   }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('admin');
+    sessionStorage.removeItem('token');
+    sessionStorage.removeItem('admin');
     setIsAuthenticated(false);
     setAdmin({});
-    // No navigate here because we'll be outside the router in the standard logic, 
-    // or the conditional render will kick in.
   };
 
   return (

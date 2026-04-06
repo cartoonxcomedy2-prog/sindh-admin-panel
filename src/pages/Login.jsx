@@ -7,6 +7,7 @@ export default function LoginPage({ setAuth, setAdmin }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
@@ -25,8 +26,9 @@ export default function LoginPage({ setAuth, setAdmin }) {
         return;
       }
       
-      localStorage.setItem('token', token);
-      localStorage.setItem('admin', JSON.stringify(adminData));
+      const storage = rememberMe ? localStorage : sessionStorage;
+      storage.setItem('token', token);
+      storage.setItem('admin', JSON.stringify(adminData));
       
       setAdmin(adminData);
       setAuth(true);
@@ -107,6 +109,19 @@ export default function LoginPage({ setAuth, setAdmin }) {
                   {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                 </button>
               </div>
+            </div>
+
+            <div className="flex items-center gap-2 px-1">
+              <input
+                type="checkbox"
+                id="rememberMe"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="w-4 h-4 rounded border-white/10 bg-white/5 text-teal-500 focus:ring-offset-0 focus:ring-teal-500/50"
+              />
+              <label htmlFor="rememberMe" className="text-sm font-bold text-gray-400 cursor-pointer hover:text-gray-300 transition-colors">
+                REMEMBER ME ON THIS DEVICE
+              </label>
             </div>
 
             <button
