@@ -327,7 +327,9 @@ export default function CreateScholarship() {
           }))
           .filter((item) => item.email || item.phone),
         contact,
-        programs: [...bachelorPrograms, ...masterPrograms].filter((p) => p.name.trim()),
+        programs: [...bachelorPrograms, ...masterPrograms]
+          .filter((p) => typeof p === 'object' && p !== null && p.name && p.name.trim() !== '' && p.name !== 'Other')
+          .map(p => ({ ...p, name: p.name.trim() })),
         duration,
         amount,
         provider,

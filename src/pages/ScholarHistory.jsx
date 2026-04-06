@@ -128,12 +128,17 @@ export default function ScholarHistory() {
     }
   };
 
+  const resolveUploadUrl = (value) => {
+    if (!value) return '';
+    if (value.startsWith('http') || value.startsWith('data:')) return value;
+    const cleaned = value.replace(/^\/?uploads\//, '');
+    return `https://sindh-backend-api.onrender.com/uploads/${cleaned}`;
+  };
+
   const renderThumbnail = (s) => {
     const thumb = s.thumbnail || s.image;
     if (thumb) {
-      const src = thumb.startsWith('http') || thumb.startsWith('data:') 
-        ? thumb 
-        : `http://localhost:5000${thumb.startsWith('/') ? '' : '/'}${thumb}`;
+      const src = resolveUploadUrl(thumb);
       return <img src={src} alt={s.title} />;
     }
     return <span style={{ fontSize: 20 }}>🎓</span>;

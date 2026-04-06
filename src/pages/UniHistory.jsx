@@ -142,11 +142,16 @@ export default function UniHistory() {
     }
   };
 
+  const resolveUploadUrl = (value) => {
+    if (!value) return '';
+    if (value.startsWith('http') || value.startsWith('data:')) return value;
+    const cleaned = value.replace(/^\/?uploads\//, '');
+    return `https://sindh-backend-api.onrender.com/uploads/${cleaned}`;
+  };
+
   const renderThumbnail = (u) => {
     if (u.thumbnail) {
-      const src = u.thumbnail.startsWith('http') || u.thumbnail.startsWith('data:') 
-        ? u.thumbnail 
-        : `http://localhost:5000${u.thumbnail.startsWith('/') ? '' : '/'}${u.thumbnail}`;
+      const src = resolveUploadUrl(u.thumbnail);
       return <img src={src} alt={u.name} />;
     }
     return <span style={{ fontSize: 20 }}>🏛️</span>;
