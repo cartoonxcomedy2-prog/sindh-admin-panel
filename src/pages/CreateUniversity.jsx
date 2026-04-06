@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import API from '../api';
+import imageCompression from 'browser-image-compression';
 import { getStates, getCities, getCurrency } from '../data/locations';
 import { BACHELOR_PROGRAMS, MASTER_PROGRAMS } from '../data/programs';
 import '../forms.css';
@@ -203,12 +204,25 @@ export default function CreateUniversity() {
     setCity('');
   };
 
-  const handleImageChange = (e) => {
+  const handleImageChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+
+    let compressedFile = file;
+    try {
+      const options = {
+        maxSizeMB: 1,
+        maxWidthOrHeight: 1200,
+        useWebWorker: true
+      };
+      compressedFile = await imageCompression(file, options);
+    } catch (error) {
+      console.error("Compression error:", error);
+    }
+
     const reader = new FileReader();
     reader.onloadend = () => setThumbnailPreview(reader.result);
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(compressedFile);
   };
 
   const toggleStep = (step) => {

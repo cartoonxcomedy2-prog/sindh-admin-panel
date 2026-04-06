@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, Image as ImageIcon, Loader2, Pencil, X } from 'lucide-react';
 import API from '../api';
+import imageCompression from 'browser-image-compression';
 
 const getBannerItems = (payload) => {
   if (Array.isArray(payload)) return payload;
@@ -43,18 +44,31 @@ const Banners = () => {
     }
   };
 
-  const handleFileChange = (e) => {
+  const handleFileChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Optional: Image compression
+    let compressedFile = file;
+    try {
+      const options = {
+        maxSizeMB: 1,
+        maxWidthOrHeight: 1920,
+        useWebWorker: true
+      };
+      compressedFile = await imageCompression(file, options);
+    } catch (error) {
+      console.error("Compression error:", error);
+    }
+
     if (preview?.startsWith('blob:')) URL.revokeObjectURL(preview);
-    setPreview(URL.createObjectURL(file));
+    setPreview(URL.createObjectURL(compressedFile));
 
     const reader = new FileReader();
     reader.onloadend = () => {
       setFormData((prev) => ({ ...prev, imageUrl: reader.result || '' }));
     };
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(compressedFile);
   };
 
   const handleSubmit = async (e) => {
@@ -123,8 +137,13 @@ const Banners = () => {
 
   const buildBannerImageUrl = (imageUrl) => {
     if (!imageUrl) return '';
+    const raw = imageUrl.toString();
+    const httpIdx = raw.indexOf('http://');
+    const httpsIdx = raw.indexOf('https://');
+    const realUrlIdx = (httpIdx !== -1 && (httpsIdx === -1 || httpIdx < httpsIdx)) ? httpIdx : httpsIdx;
+    if (realUrlIdx !== -1) return raw.substring(realUrlIdx);
+    
     if (imageUrl.startsWith('data:')) return imageUrl;
-    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) return imageUrl;
     if (imageUrl.startsWith('/uploads/')) return `${SERVER_URL}${imageUrl}`;
     return `${SERVER_URL}/uploads/${imageUrl}`;
   };

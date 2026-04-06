@@ -7,6 +7,16 @@ import { getStates, getCities } from '../data/locations';
 const ALL_STATUSES = ['Applied', 'Admit Card', 'Test', 'Interview', 'Selected', 'Rejected'];
 const ADMIN_COUNTRY = 'Pakistan';
 
+const getFileUrl = (fileName) => {
+  if (!fileName) return '';
+  const raw = fileName.toString();
+  const httpIdx = raw.indexOf('http://');
+  const httpsIdx = raw.indexOf('https://');
+  const realUrlIdx = (httpIdx !== -1 && (httpsIdx === -1 || httpIdx < httpsIdx)) ? httpIdx : httpsIdx;
+  if (realUrlIdx !== -1) return raw.substring(realUrlIdx);
+  return `${API.defaults.baseURL.replace('/api', '')}/uploads/${fileName}`;
+};
+
 export default function AdminApplications() {
   const navigate = useNavigate();
   const [data, setData] = useState([]);
@@ -639,7 +649,7 @@ export default function AdminApplications() {
                   {fileName ? (
                     <>
                       <a
-                        href={`${API.defaults.baseURL.replace('/api', '')}/uploads/${fileName}`}
+                        href={getFileUrl(fileName)}
                         target="_blank"
                         rel="noreferrer"
                         className="btn-icon small"

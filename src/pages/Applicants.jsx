@@ -7,6 +7,16 @@ import { getStates, getCities } from '../data/locations';
 const ALL_STATUSES = ['Applied', 'Admit Card', 'Test', 'Interview', 'Selected', 'Rejected'];
 const ADMIN_COUNTRY = 'Pakistan';
 
+const getFileUrl = (fileName) => {
+  if (!fileName) return '';
+  const raw = fileName.toString();
+  const httpIdx = raw.indexOf('http://');
+  const httpsIdx = raw.indexOf('https://');
+  const realUrlIdx = (httpIdx !== -1 && (httpsIdx === -1 || httpIdx < httpsIdx)) ? httpIdx : httpsIdx;
+  if (realUrlIdx !== -1) return raw.substring(realUrlIdx);
+  return `${API.defaults.baseURL.replace('/api', '')}/uploads/${fileName}`;
+};
+
 export default function Applicants() {
   const { type, id } = useParams();
   const navigate = useNavigate();
@@ -576,7 +586,7 @@ export default function Applicants() {
                     </div>
                     <div style={{ display: 'flex', gap: 10 }}>
                       <a 
-                        href={`${API.defaults.baseURL.replace('/api', '')}/uploads/${fileName}`} 
+                        href={getFileUrl(fileName)} 
                         target="_blank" 
                         rel="noreferrer" 
                         className="btn-action" 
@@ -1393,7 +1403,7 @@ export default function Applicants() {
                                  {offeredData.admitCard ? '🔄 Admit' : '+ Admit'}
                                </button>
                                {offeredData.admitCard && (
-                                 <a href={`${API.defaults.baseURL.replace('/api', '')}/uploads/${offeredData.admitCard}`} target="_blank" rel="noreferrer" style={{ padding: '6px 10px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 8 }}>👁️</a>
+                                 <a href={getFileUrl(offeredData.admitCard)} target="_blank" rel="noreferrer" style={{ padding: '6px 10px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 8 }}>👁️ View</a>
                                )}
                              </div>
                              
@@ -1402,7 +1412,7 @@ export default function Applicants() {
                                  {offeredData.offerLetter ? '🔄 Offer' : '+ Offer'}
                                </button>
                                {offeredData.offerLetter && (
-                                 <a href={`${API.defaults.baseURL.replace('/api', '')}/uploads/${offeredData.offerLetter}`} target="_blank" rel="noreferrer" style={{ padding: '6px 10px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 8 }}>👁️</a>
+                                 <a href={getFileUrl(offeredData.offerLetter)} target="_blank" rel="noreferrer" style={{ padding: '6px 10px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 8 }}>👁️ View</a>
                                )}
                              </div>
                           </div>
@@ -1416,7 +1426,7 @@ export default function Applicants() {
               <div className="direct-docs" style={{ borderTop: '1px solid var(--border)', paddingTop: 15, padding: 20 }}>
                 <h4 style={{ marginBottom: 15 }}>📤 Admission Documents (General)</h4>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 15, marginBottom: 20 }}>
-                  <div className="doc-tile-admin" style={{ padding: 15, borderRadius: 16,  }}>
+                  <div className="doc-tile-admin" style={{ padding: 15, borderRadius: 16 }}>
                     <label style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', marginBottom: 10, display: 'block' }}>Admit Card PDF</label>
                     <div style={{ display: 'flex', gap: 10 }}>
                       <button 
@@ -1428,14 +1438,14 @@ export default function Applicants() {
                       </button>
                       {selectedApp.admitCard && (
                         <>
-                          <a href={`${API.defaults.baseURL.replace('/api', '')}/uploads/${selectedApp.admitCard}`} target="_blank" rel="noreferrer" style={{ padding: '10px 14px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 10, textDecoration: 'none' }}>👁️</a>
+                          <a href={getFileUrl(selectedApp.admitCard)} target="_blank" rel="noreferrer" style={{ padding: '10px 14px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 10, textDecoration: 'none' }}>👁️ View</a>
                           <button onClick={() => handleDeleteAppDoc(selectedApp._id, 'admitCard')} style={{ padding: '10px 14px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: 10, cursor: 'pointer' }}>🗑️</button>
                         </>
                       )}
                     </div>
                   </div>
 
-                  <div className="doc-tile-admin" style={{ padding: 15, borderRadius: 16,  }}>
+                  <div className="doc-tile-admin" style={{ padding: 15, borderRadius: 16 }}>
                     <label style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', marginBottom: 10, display: 'block' }}>Offer Letter PDF</label>
                     <div style={{ display: 'flex', gap: 10 }}>
                       <button 
@@ -1447,7 +1457,7 @@ export default function Applicants() {
                       </button>
                       {selectedApp.offerLetter && (
                         <>
-                          <a href={`${API.defaults.baseURL.replace('/api', '')}/uploads/${selectedApp.offerLetter}`} target="_blank" rel="noreferrer" style={{ padding: '10px 14px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 10, textDecoration: 'none' }}>👁️</a>
+                          <a href={getFileUrl(selectedApp.offerLetter)} target="_blank" rel="noreferrer" style={{ padding: '10px 14px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 10, textDecoration: 'none' }}>👁️ View</a>
                           <button onClick={() => handleDeleteAppDoc(selectedApp._id, 'offerLetter')} style={{ padding: '10px 14px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: 10, cursor: 'pointer' }}>🗑️</button>
                         </>
                       )}

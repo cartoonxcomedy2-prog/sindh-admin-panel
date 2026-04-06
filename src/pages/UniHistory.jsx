@@ -144,9 +144,12 @@ export default function UniHistory() {
 
   const resolveUploadUrl = (value) => {
     if (!value) return '';
-    if (value.startsWith('http') || value.startsWith('data:')) return value;
-    const cleaned = value.replace(/^\/?uploads\//, '');
-    return `https://sindh-backend-api.onrender.com/uploads/${cleaned}`;
+    const raw = value.toString();
+    const httpIdx = raw.indexOf('http://');
+    const httpsIdx = raw.indexOf('https://');
+    const realUrlIdx = (httpIdx !== -1 && (httpsIdx === -1 || httpIdx < httpsIdx)) ? httpIdx : httpsIdx;
+    if (realUrlIdx !== -1) return raw.substring(realUrlIdx);
+    return `${API.defaults.baseURL.replace('/api', '')}/uploads/${value}`;
   };
 
   const renderThumbnail = (u) => {
