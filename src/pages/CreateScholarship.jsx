@@ -422,13 +422,36 @@ export default function CreateScholarship() {
         thumbnail: thumbnailPreview || undefined,
       };
 
-      if (isEdit) {
-        await API.put(`/scholarships/${id}`, payload);
-        showToast('Scholarship updated successfully!');
-      } else {
-        await API.post('/scholarships', payload);
-        showToast('Scholarship published successfully!');
+      const saveScholarship = (body) =>
+        (isEdit ? API.put(`/scholarships/${id}`, body) : API.post('/scholarships', body));
+
+      const successMessage = isEdit
+        ? 'Scholarship updated successfully!'
+        : 'Scholarship published successfully!';
+
+      try {
+        await saveScholarship(payload);
+      } catch (err) {
+        const serverMessage = err.response?.data?.message || '';
+        const shouldRetryWithLegacyPrograms =
+          Array.isArray(payload.programs) &&
+          payload.programs.some((item) => item && typeof item === 'object') &&
+          /programs\.0/i.test(serverMessage) &&
+          /Cast to \[string\] failed/i.test(serverMessage);
+
+        if (!shouldRetryWithLegacyPrograms) throw err;
+
+        const legacyPayload = {
+          ...payload,
+          programs: payload.programs
+            .map((item) => (typeof item === 'string' ? item : item?.name || ''))
+            .map((name) => name.trim())
+            .filter(Boolean),
+        };
+        await saveScholarship(legacyPayload);
       }
+
+      showToast(successMessage);
       setTimeout(() => navigate(isEdit ? '/scholar-history' : '/scholarships'), 1500);
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to save scholarship');
