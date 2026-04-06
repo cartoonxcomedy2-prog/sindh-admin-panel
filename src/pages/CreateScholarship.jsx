@@ -72,6 +72,77 @@ const normalizeScholarshipProgram = (program = {}) => {
   };
 };
 
+const tryParseLooseJSON = (value) => {
+  if (typeof value !== 'string') return null;
+  const cleaned = value.replace(/'\s*\+\s*'/g, '').replace(/\\n/g, '\n').trim();
+  if (!cleaned || (!cleaned.includes('{') && !cleaned.includes('[')) || !cleaned.includes(':')) {
+    return null;
+  }
+  const fixed = cleaned
+    .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":')
+    .replace(/'/g, '"');
+  try {
+    return JSON.parse(fixed);
+  } catch {
+    return null;
+  }
+};
+
+const extractProgramFromString = (value) => {
+  if (typeof value !== 'string') return null;
+  const nameMatch = /name\s*[:=]\s*['"]([^'"]+)['"]/i.exec(value);
+  const typeMatch = /type\s*[:=]\s*['"]([^'"]+)['"]/i.exec(value);
+  const durationMatch = /duration\s*[:=]\s*['"]([^'"]+)['"]/i.exec(value);
+  if (!nameMatch && !typeMatch && !durationMatch) return null;
+  return {
+    name: nameMatch?.[1] || '',
+    type: typeMatch?.[1] || '',
+    duration: durationMatch?.[1] || '',
+  };
+};
+
+const normalizeProgramPayload = (entry, fallbackType) => {
+  if (!entry) return null;
+
+  if (typeof entry === 'string') {
+    const parsed = tryParseLooseJSON(entry);
+    if (Array.isArray(parsed)) return normalizeProgramPayload(parsed[0], fallbackType);
+    if (parsed && typeof parsed === 'object') return normalizeProgramPayload(parsed, fallbackType);
+
+    const extracted = extractProgramFromString(entry);
+    if (extracted) return normalizeProgramPayload(extracted, fallbackType);
+
+    const name = entry.trim();
+    if (!name) return null;
+    const type = normalizeProgramType(fallbackType || '', name);
+    return {
+      name,
+      type,
+      duration: type === 'Bachelor' ? '4 Years' : '2 Years',
+    };
+  }
+
+  if (Array.isArray(entry)) {
+    return normalizeProgramPayload(entry[0], fallbackType);
+  }
+
+  if (typeof entry === 'object') {
+    const name = (entry.name || entry.programName || '').toString().trim();
+    if (!name) return null;
+    const type = normalizeProgramType(
+      entry.type || entry.programType || entry.level || fallbackType,
+      name,
+    );
+    return {
+      name,
+      type,
+      duration: entry.duration || (type === 'Bachelor' ? '4 Years' : '2 Years'),
+    };
+  }
+
+  return null;
+};
+
 function Toast({ msg }) {
   return <div className="toast">✅ {msg}</div>;
 }
@@ -336,8 +407,9 @@ export default function CreateScholarship() {
           .filter((item) => item.email || item.phone),
         contact,
         programs: [...bachelorPrograms, ...masterPrograms]
-          .filter((p) => typeof p === 'object' && p !== null && p.name && p.name.trim() !== '' && p.name !== 'Other')
-          .map(p => ({ ...p, name: p.name.trim() })),
+          .map((p) => normalizeProgramPayload(p, p?.type))
+          .filter((p) => p && p.name && p.name.trim() !== '' && p.name !== 'Other')
+          .map((p) => ({ ...p, name: p.name.trim() })),
         duration,
         amount,
         provider,
