@@ -429,31 +429,12 @@ export default function CreateScholarship() {
         ? 'Scholarship updated successfully!'
         : 'Scholarship published successfully!';
 
-      try {
-        await saveScholarship(payload);
-      } catch (err) {
-        const serverMessage = err.response?.data?.message || '';
-        const shouldRetryWithLegacyPrograms =
-          Array.isArray(payload.programs) &&
-          payload.programs.some((item) => item && typeof item === 'object') &&
-          /programs\.0/i.test(serverMessage) &&
-          /Cast to \[string\] failed/i.test(serverMessage);
-
-        if (!shouldRetryWithLegacyPrograms) throw err;
-
-        const legacyPayload = {
-          ...payload,
-          programs: payload.programs
-            .map((item) => (typeof item === 'string' ? item : item?.name || ''))
-            .map((name) => name.trim())
-            .filter(Boolean),
-        };
-        await saveScholarship(legacyPayload);
-      }
+      await saveScholarship(payload);
 
       showToast(successMessage);
       setTimeout(() => navigate(isEdit ? '/scholar-history' : '/scholarships'), 1500);
     } catch (err) {
+      console.error('Scholarship save error:', err);
       alert(err.response?.data?.message || 'Failed to save scholarship');
     } finally {
       setLoading(false);
