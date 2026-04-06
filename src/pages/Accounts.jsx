@@ -206,13 +206,32 @@ export default function Accounts() {
               </div>
               <div>
                 <label style={labelStyle}>Email *</label>
-                <input type="email" value={formEmail} onChange={(e) => setFormEmail(e.target.value)} placeholder="john@example.com" required style={inputStyle} />
+                <input
+                  type="email"
+                  value={formEmail}
+                  onChange={(e) => setFormEmail(e.target.value)}
+                  placeholder="john@example.com"
+                  required
+                  style={inputStyle}
+                  autoComplete="new-email"
+                  name="user-email-field"
+                />
               </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 20 }}>
               <div>
                 <label style={labelStyle}>Password *</label>
-                <input type="password" value={formPassword} onChange={(e) => setFormPassword(e.target.value)} placeholder="Min 6 characters" required minLength={6} style={inputStyle} />
+                <input
+                  type="password"
+                  value={formPassword}
+                  onChange={(e) => setFormPassword(e.target.value)}
+                  placeholder="Min 6 characters"
+                  required
+                  autoComplete="new-password"
+                  name="user-password-field"
+                  minLength={6}
+                  style={inputStyle}
+                />
               </div>
               <div>
                 <label style={labelStyle}>Type *</label>
