@@ -17,6 +17,50 @@ const getFileUrl = (fileName) => {
   return `${API.defaults.baseURL.replace('/api', '')}/uploads/${fileName}`;
 };
 
+const sanitizeFileNamePart = (value, fallback = 'document') => {
+  const cleaned = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return cleaned || fallback;
+};
+
+const inferFileExtension = (value, fallback = '.pdf') => {
+  const raw = String(value || '').trim();
+  if (!raw) return fallback;
+
+  let pathname = raw;
+  const httpIdx = raw.indexOf('http://');
+  const httpsIdx = raw.indexOf('https://');
+  const urlIdx = (httpIdx !== -1 && (httpsIdx === -1 || httpIdx < httpsIdx)) ? httpIdx : httpsIdx;
+  if (urlIdx !== -1) {
+    try {
+      pathname = new URL(raw.substring(urlIdx)).pathname || raw;
+    } catch {
+      pathname = raw;
+    }
+  }
+
+  const dotIndex = pathname.lastIndexOf('.');
+  if (dotIndex === -1) return fallback;
+  const ext = pathname.substring(dotIndex).toLowerCase();
+  if (!ext || ext.length > 10) return fallback;
+  return ext;
+};
+
+const triggerBlobDownload = (blobData, downloadName) => {
+  const blobUrl = window.URL.createObjectURL(new Blob([blobData]));
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.download = downloadName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(blobUrl);
+};
+
 export default function Applicants() {
   const { type, id } = useParams();
   const navigate = useNavigate();
@@ -235,6 +279,98 @@ export default function Applicants() {
       fetchApplicants();
     } catch {
       alert('Delete failed');
+    }
+  };
+
+  const buildApplicationDocDownloadName = ({ field, sourceFile, universityName = '' }) => {
+    const userName =
+      studentData?.name ||
+      currentAppForModal?.user?.name ||
+      selectedApp?.user?.name ||
+      'applicant';
+    const docLabel = field === 'admitCard' ? 'admit-card' : 'offer-letter';
+    const ext = inferFileExtension(sourceFile, '.pdf');
+    const parts = [
+      sanitizeFileNamePart(userName, 'applicant'),
+      sanitizeFileNamePart(universityName, ''),
+      docLabel,
+    ].filter(Boolean);
+    return `${parts.join('-') || 'document'}${ext}`;
+  };
+
+  const downloadApplicationDoc = async ({
+    appId,
+    field,
+    sourceFile,
+    universityId = '',
+    universityName = '',
+  }) => {
+    try {
+      const preferredName = buildApplicationDocDownloadName({
+        field,
+        sourceFile,
+        universityName,
+      });
+      const res = await API.get(`/applications/${appId}/download-doc/${field}`, {
+        params: {
+          uniId: universityId || undefined,
+          downloadName: preferredName,
+        },
+        responseType: 'blob',
+      });
+      triggerBlobDownload(res.data, preferredName);
+    } catch (err) {
+      console.error('Application doc download failed:', err);
+      alert('Failed to download document');
+    }
+  };
+
+  const downloadEducationDoc = async (section, field, sourceFile, preferredName) => {
+    try {
+      const fallbackExt = inferFileExtension(sourceFile, '.pdf');
+      const safeName = String(preferredName || '').trim()
+        ? preferredName
+        : `${sanitizeFileNamePart(studentData?.name || 'applicant', 'applicant')}-${section}-${field}${fallbackExt}`;
+
+      const response = await API.get(
+        `/users/${studentData._id}/education/${section}/${field}/download`,
+        {
+          params: { downloadName: safeName },
+          responseType: 'blob',
+        }
+      );
+      triggerBlobDownload(response.data, safeName);
+    } catch (err) {
+      console.error('Education download failed:', err);
+      alert('Failed to download document');
+    }
+  };
+
+  const handleDeleteUniDoc = async (appId, uniId, field) => {
+    if (!window.confirm(`Delete ${field === 'admitCard' ? 'Admit Card' : 'Offer Letter'} for this university?`)) return;
+    try {
+      const payload = { universityId: uniId, [field]: null };
+      const res = await API.put(`/applications/${appId}/university-status`, payload);
+      setSelectedApp(res.data.data);
+      setData(prev => prev.map(a => a._id === appId ? res.data.data : a));
+    } catch (err) {
+      console.error('Offered university doc delete failed:', err);
+      alert('Failed to delete university document');
+    }
+  };
+
+  const handleDownloadFullBundle = async () => {
+    if (!currentAppForModal?._id) return;
+    try {
+      const preferredName = `${sanitizeFileNamePart(studentData?.name || 'applicant', 'applicant')}-bundle.zip`;
+      const res = await API.get(`/applications/${currentAppForModal._id}/download-bundle`, {
+        params: { downloadName: preferredName },
+        responseType: 'blob',
+      });
+      triggerBlobDownload(res.data, preferredName);
+    } catch (err) {
+      console.error('Bundle download failed:', err);
+      alert('Download failed');
     }
   };
 
@@ -542,6 +678,7 @@ export default function Applicants() {
           {fields.map(f => {
             const fileName = f.isPersonalInfo ? (studentData?.education?.personalInfo?.[f.key]) : eduData[f.key];
             const displayLabel = `${studentData?.name}_${title}_${f.label}`.replace(/\s+/g, '_');
+            const displayNameWithExt = `${displayLabel}${inferFileExtension(fileName, '.pdf')}`;
             return (
               <div key={f.key} className="doc-tile" style={{ padding: '20px', 
                 borderRadius: '16px', 
@@ -582,7 +719,7 @@ export default function Applicants() {
                       wordBreak: 'break-all',
                       fontWeight: 500 
                     }}>
-                      {displayLabel}.pdf
+                      {displayNameWithExt}
                     </div>
                     <div style={{ display: 'flex', gap: 10 }}>
                       <a 
@@ -609,6 +746,13 @@ export default function Applicants() {
                       >
                         👁️ View
                       </a>
+                      <button 
+                        onClick={() => downloadEducationDoc(section, f.key, fileName, displayNameWithExt)}
+                        style={{ padding: '8px', background: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: '8px', cursor: 'pointer' }}
+                        title="Download"
+                      >
+                        Download
+                      </button>
                       <button 
                         onClick={() => handleDocUpload(section, f.key)}
                         style={{ padding: '8px', background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: '8px', cursor: 'pointer' }}
@@ -1091,30 +1235,7 @@ export default function Applicants() {
                 </div>
 
                 <button 
-                  onClick={async (e) => {
-                    const btn = e.currentTarget;
-                    const originalText = btn.textContent;
-                    try {
-                      btn.disabled = true;
-                      btn.textContent = 'Bundling...';
-                      const res = await API.get(`/applications/${currentAppForModal._id}/download-bundle`, {
-                        responseType: 'blob'
-                      });
-                      const url = window.URL.createObjectURL(new Blob([res.data]));
-                      const link = document.createElement('a');
-                      link.href = url;
-                      link.setAttribute('download', `${studentData.name.replace(/\s+/g, '_')}_Bundle.zip`);
-                      document.body.appendChild(link);
-                      link.click();
-                      document.body.removeChild(link);
-                    } catch (err) {
-                      console.error('BUNDLE ERROR:', err);
-                      alert('Download Failed.');
-                    } finally {
-                      btn.disabled = false;
-                      btn.textContent = originalText;
-                    }
-                  }}
+                  onClick={handleDownloadFullBundle}
                   style={{
                     background: 'var(--primary)',
                     color: 'white', border: 'none', padding: '10px 18px', borderRadius: '12px',
@@ -1402,8 +1523,32 @@ export default function Applicants() {
                                <button className={`btn-publish small ${offeredData.admitCard ? 'success' : ''}`} onClick={() => handleFileUpload(selectedApp._id, 'admitCard', uniId)}>
                                  {offeredData.admitCard ? '🔄 Admit' : '+ Admit'}
                                </button>
-                               {offeredData.admitCard && (
-                                 <a href={getFileUrl(offeredData.admitCard)} target="_blank" rel="noreferrer" style={{ padding: '6px 10px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 8 }}>👁️ View</a>
+                                {offeredData.admitCard && (
+                                  <>
+                                    <a href={getFileUrl(offeredData.admitCard)} target="_blank" rel="noreferrer" style={{ padding: '6px 10px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 8, textDecoration: 'none' }}>
+                                      View
+                                    </a>
+                                    <button
+                                     onClick={() =>
+                                       downloadApplicationDoc({
+                                         appId: selectedApp._id,
+                                         field: 'admitCard',
+                                         sourceFile: offeredData.admitCard,
+                                         universityId: uniId,
+                                         universityName: uni.name,
+                                       })
+                                     }
+                                     style={{ padding: '6px 10px', background: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 8, cursor: 'pointer' }}
+                                   >
+                                     Download
+                                   </button>
+                                   <button
+                                     onClick={() => handleDeleteUniDoc(selectedApp._id, uniId, 'admitCard')}
+                                     style={{ padding: '6px 10px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: 8, cursor: 'pointer' }}
+                                   >
+                                     Delete
+                                   </button>
+                                 </>
                                )}
                              </div>
                              
@@ -1411,8 +1556,32 @@ export default function Applicants() {
                                <button className={`btn-publish small ${offeredData.offerLetter ? 'success' : ''}`} onClick={() => handleFileUpload(selectedApp._id, 'offerLetter', uniId)}>
                                  {offeredData.offerLetter ? '🔄 Offer' : '+ Offer'}
                                </button>
-                               {offeredData.offerLetter && (
-                                 <a href={getFileUrl(offeredData.offerLetter)} target="_blank" rel="noreferrer" style={{ padding: '6px 10px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 8 }}>👁️ View</a>
+                                {offeredData.offerLetter && (
+                                  <>
+                                    <a href={getFileUrl(offeredData.offerLetter)} target="_blank" rel="noreferrer" style={{ padding: '6px 10px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 8, textDecoration: 'none' }}>
+                                      View
+                                    </a>
+                                    <button
+                                     onClick={() =>
+                                       downloadApplicationDoc({
+                                         appId: selectedApp._id,
+                                         field: 'offerLetter',
+                                         sourceFile: offeredData.offerLetter,
+                                         universityId: uniId,
+                                         universityName: uni.name,
+                                       })
+                                     }
+                                     style={{ padding: '6px 10px', background: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 8, cursor: 'pointer' }}
+                                   >
+                                     Download
+                                   </button>
+                                   <button
+                                     onClick={() => handleDeleteUniDoc(selectedApp._id, uniId, 'offerLetter')}
+                                     style={{ padding: '6px 10px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: 8, cursor: 'pointer' }}
+                                   >
+                                     Delete
+                                   </button>
+                                 </>
                                )}
                              </div>
                           </div>
@@ -1429,17 +1598,29 @@ export default function Applicants() {
                   <div className="doc-tile-admin" style={{ padding: 15, borderRadius: 16 }}>
                     <label style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', marginBottom: 10, display: 'block' }}>Admit Card PDF</label>
                     <div style={{ display: 'flex', gap: 10 }}>
-                      <button 
-                        className={`btn-publish ${selectedApp.admitCard ? 'success' : ''}`} 
+                      <button
+                        className={`btn-publish ${selectedApp.admitCard ? 'success' : ''}`}
                         onClick={() => handleFileUpload(selectedApp._id, 'admitCard')}
                         style={{ flex: 1, padding: '10px', fontSize: 13, borderRadius: 10 }}
                       >
-                        {selectedApp.admitCard ? '🔄 Replace PDF' : '+ Upload PDF'}
+                        {selectedApp.admitCard ? 'Replace PDF' : '+ Upload PDF'}
                       </button>
                       {selectedApp.admitCard && (
                         <>
-                          <a href={getFileUrl(selectedApp.admitCard)} target="_blank" rel="noreferrer" style={{ padding: '10px 14px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 10, textDecoration: 'none' }}>👁️ View</a>
-                          <button onClick={() => handleDeleteAppDoc(selectedApp._id, 'admitCard')} style={{ padding: '10px 14px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: 10, cursor: 'pointer' }}>🗑️</button>
+                          <a href={getFileUrl(selectedApp.admitCard)} target="_blank" rel="noreferrer" style={{ padding: '10px 14px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 10, textDecoration: 'none' }}>View</a>
+                          <button
+                            onClick={() =>
+                              downloadApplicationDoc({
+                                appId: selectedApp._id,
+                                field: 'admitCard',
+                                sourceFile: selectedApp.admitCard,
+                              })
+                            }
+                            style={{ padding: '10px 14px', background: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 10, cursor: 'pointer' }}
+                          >
+                            Download
+                          </button>
+                          <button onClick={() => handleDeleteAppDoc(selectedApp._id, 'admitCard')} style={{ padding: '10px 14px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: 10, cursor: 'pointer' }}>Delete</button>
                         </>
                       )}
                     </div>
@@ -1448,23 +1629,34 @@ export default function Applicants() {
                   <div className="doc-tile-admin" style={{ padding: 15, borderRadius: 16 }}>
                     <label style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', marginBottom: 10, display: 'block' }}>Offer Letter PDF</label>
                     <div style={{ display: 'flex', gap: 10 }}>
-                      <button 
-                        className={`btn-publish ${selectedApp.offerLetter ? 'success' : ''}`} 
+                      <button
+                        className={`btn-publish ${selectedApp.offerLetter ? 'success' : ''}`}
                         onClick={() => handleFileUpload(selectedApp._id, 'offerLetter')}
                         style={{ flex: 1, padding: '10px', fontSize: 13, borderRadius: 10 }}
                       >
-                        {selectedApp.offerLetter ? '🔄 Replace PDF' : '+ Upload PDF'}
+                        {selectedApp.offerLetter ? 'Replace PDF' : '+ Upload PDF'}
                       </button>
                       {selectedApp.offerLetter && (
                         <>
-                          <a href={getFileUrl(selectedApp.offerLetter)} target="_blank" rel="noreferrer" style={{ padding: '10px 14px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 10, textDecoration: 'none' }}>👁️ View</a>
-                          <button onClick={() => handleDeleteAppDoc(selectedApp._id, 'offerLetter')} style={{ padding: '10px 14px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: 10, cursor: 'pointer' }}>🗑️</button>
+                          <a href={getFileUrl(selectedApp.offerLetter)} target="_blank" rel="noreferrer" style={{ padding: '10px 14px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 10, textDecoration: 'none' }}>View</a>
+                          <button
+                            onClick={() =>
+                              downloadApplicationDoc({
+                                appId: selectedApp._id,
+                                field: 'offerLetter',
+                                sourceFile: selectedApp.offerLetter,
+                              })
+                            }
+                            style={{ padding: '10px 14px', background: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 10, cursor: 'pointer' }}
+                          >
+                            Download
+                          </button>
+                          <button onClick={() => handleDeleteAppDoc(selectedApp._id, 'offerLetter')} style={{ padding: '10px 14px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: 10, cursor: 'pointer' }}>Delete</button>
                         </>
                       )}
                     </div>
                   </div>
                 </div>
-                
                 <h4 style={{ marginBottom: 12 }}>📅 Important Dates</h4>
                 <div style={{ display: 'flex', gap: 15, flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: 1 }}>
