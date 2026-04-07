@@ -104,14 +104,44 @@ function App() {
 
   return (
     <Router>
-      {authChecking ? (
-        <AuthLoadingScreen />
-      ) : !isAuthenticated ? (
-        <Login setAuth={setIsAuthenticated} setAdmin={setAdmin} />
-      ) : (
-        <AdminLayout admin={admin} onLogout={handleLogout} />
-      )}
+      <AppRouterShell
+        authChecking={authChecking}
+        isAuthenticated={isAuthenticated}
+        admin={admin}
+        onLogout={handleLogout}
+        setAuth={setIsAuthenticated}
+        setAdmin={setAdmin}
+      />
     </Router>
+  );
+}
+
+function AppRouterShell({
+  authChecking,
+  isAuthenticated,
+  admin,
+  onLogout,
+  setAuth,
+  setAdmin,
+}) {
+  if (authChecking) {
+    return <AuthLoadingScreen />;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <Routes>
+        <Route path="/login" element={<Login setAuth={setAuth} setAdmin={setAdmin} />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
+  }
+
+  return (
+    <Routes>
+      <Route path="/login" element={<Navigate to="/" replace />} />
+      <Route path="/*" element={<AdminLayout admin={admin} onLogout={onLogout} />} />
+    </Routes>
   );
 }
 
