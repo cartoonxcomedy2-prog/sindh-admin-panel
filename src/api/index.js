@@ -2,6 +2,10 @@ import axios from 'axios';
 
 const ENV_API_BASE = import.meta.env.VITE_API_BASE_URL;
 const DEFAULT_API_BASE = 'https://sindh-backend-api.onrender.com/api';
+const GET_CACHE_TTL_MS = Number(import.meta.env.VITE_API_GET_CACHE_TTL_MS || 15000);
+const GET_CACHE_STALE_MS = Number(import.meta.env.VITE_API_GET_CACHE_STALE_MS || 60000);
+const GET_CACHE_MAX_ENTRIES = Number(import.meta.env.VITE_API_GET_CACHE_MAX_ENTRIES || 250);
+const getCacheStore = new Map();
 
 const normalizeApiBase = (value) => {
   const raw = String(value || '').trim();
@@ -28,26 +32,155 @@ const redirectToLogin = () => {
   window.location.replace(`/login?next=${encodedNext}`);
 };
 
+const stableSerialize = (value) => {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${key}:${stableSerialize(value[key])}`)
+      .join(',')}}`;
+  }
+  return String(value ?? '');
+};
+
+const cloneSerializable = (value) => {
+  if (value == null) return value;
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+};
+
+const shouldCacheGet = (config = {}) => {
+  const method = String(config.method || 'get').toLowerCase();
+  const responseType = String(config.responseType || '').toLowerCase();
+  const skipCache =
+    config.skipCache === true || config.headers?.['x-skip-cache'] === 'true';
+  return (
+    method === 'get' &&
+    !skipCache &&
+    responseType !== 'blob' &&
+    responseType !== 'arraybuffer' &&
+    GET_CACHE_TTL_MS > 0
+  );
+};
+
+const buildGetCacheKey = (config = {}) => {
+  const method = String(config.method || 'get').toLowerCase();
+  const baseURL = normalizeApiBase(config.baseURL || '');
+  const url = String(config.url || '');
+  const params = stableSerialize(config.params || {});
+  const token = getStoredToken();
+  return `${method}|${baseURL}|${url}|${params}|${token}`;
+};
+
+const pruneGetCache = () => {
+  const now = Date.now();
+  for (const [key, entry] of getCacheStore.entries()) {
+    if (entry.expiresAt + GET_CACHE_STALE_MS < now) {
+      getCacheStore.delete(key);
+    }
+  }
+
+  while (getCacheStore.size > GET_CACHE_MAX_ENTRIES) {
+    const oldest = getCacheStore.keys().next().value;
+    if (!oldest) break;
+    getCacheStore.delete(oldest);
+  }
+};
+
+export const clearApiGetCache = () => {
+  getCacheStore.clear();
+};
+
 const API = axios.create({
   baseURL: normalizeApiBase(ENV_API_BASE || DEFAULT_API_BASE),
 });
 
 // Add a request interceptor to include the auth token
 API.interceptors.request.use((req) => {
+  const method = String(req.method || 'get').toLowerCase();
   const token = getStoredToken();
   if (token) {
     req.headers.Authorization = `Bearer ${token}`;
   }
+
+  if (['post', 'put', 'patch', 'delete'].includes(method)) {
+    clearApiGetCache();
+    return req;
+  }
+
+  if (!shouldCacheGet(req)) {
+    return req;
+  }
+
+  pruneGetCache();
+  const cacheKey = buildGetCacheKey(req);
+  const cached = getCacheStore.get(cacheKey);
+  if (!cached) {
+    req.__clientCacheKey = cacheKey;
+    return req;
+  }
+
+  if (cached.expiresAt > Date.now()) {
+    req.adapter = async () => ({
+      data: cloneSerializable(cached.data),
+      status: cached.status,
+      statusText: cached.statusText || 'OK',
+      headers: { ...cached.headers, 'x-client-cache': 'HIT' },
+      config: req,
+      request: { fromCache: true },
+    });
+    req.__servedFromClientCache = true;
+  } else {
+    req.__clientCacheKey = cacheKey;
+  }
+
   return req;
 });
 
 // Add a response interceptor to handle token expiration or unauthorized access
 API.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const config = response?.config || {};
+    if (shouldCacheGet(config) && !config.__servedFromClientCache) {
+      const cacheKey = config.__clientCacheKey || buildGetCacheKey(config);
+      getCacheStore.set(cacheKey, {
+        data: cloneSerializable(response.data),
+        status: response.status,
+        statusText: response.statusText,
+        headers: { 'content-type': response.headers?.['content-type'] || '' },
+        expiresAt: Date.now() + GET_CACHE_TTL_MS,
+      });
+      pruneGetCache();
+    }
+    return response;
+  },
   (error) => {
+    const config = error?.config || {};
+    if (shouldCacheGet(config) && !error?.response) {
+      const cacheKey = config.__clientCacheKey || buildGetCacheKey(config);
+      const cached = getCacheStore.get(cacheKey);
+      if (cached && cached.expiresAt + GET_CACHE_STALE_MS > Date.now()) {
+        return Promise.resolve({
+          data: cloneSerializable(cached.data),
+          status: cached.status,
+          statusText: cached.statusText || 'OK',
+          headers: { ...cached.headers, 'x-client-cache': 'STALE' },
+          config,
+          request: { fromCache: true, stale: true },
+        });
+      }
+    }
+
     const status = error?.response?.status;
     if (status === 401 || status === 403) {
       clearStoredSession();
+      clearApiGetCache();
       redirectToLogin();
     }
     return Promise.reject(error);

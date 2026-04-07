@@ -20,7 +20,7 @@ import AdminApplications from './pages/AdminApplications';
 import Accounts from './pages/Accounts';
 import AdminDashboard from './pages/AdminDashboard'; // Integrated Overview Page
 import Login from './pages/Login'; // Unified Login Page
-import { fetchProfile } from './api';
+import { clearApiGetCache, fetchProfile } from './api';
 
 const parseStoredAdmin = () => {
   try {
@@ -42,6 +42,7 @@ function App() {
     localStorage.removeItem('admin');
     sessionStorage.removeItem('token');
     sessionStorage.removeItem('admin');
+    clearApiGetCache();
   };
 
   const handleLogout = () => {
