@@ -12,6 +12,28 @@ export default function LoginPage({ setAuth, setAdmin }) {
   const [error, setError] = useState('');
   const navigate = useNavigate();
 
+  const getLoginErrorMessage = (err) => {
+    const status = err?.response?.status;
+    const serverMessage = String(err?.response?.data?.message || '').trim();
+
+    if (status === 401 || status === 403) {
+      return 'Invalid email or password.';
+    }
+    if (status === 429) {
+      return 'Too many login attempts. Please try again in a few minutes.';
+    }
+    if (!status) {
+      return 'Unable to reach server. Please check your internet connection.';
+    }
+
+    // Avoid exposing raw backend/internal errors in authentication UI.
+    if (serverMessage && !/incomingmessage|stack|syntaxerror|typeerror/i.test(serverMessage)) {
+      return serverMessage;
+    }
+
+    return 'Login failed. Please try again.';
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -41,10 +63,10 @@ export default function LoginPage({ setAuth, setAdmin }) {
       setAdmin(adminData);
       setAuth(true);
       
-      // Crucial Fix: Force redirect to Dashboard after login
-      navigate('/'); 
+      // Ensure route replacement to avoid login page in history.
+      navigate('/', { replace: true });
     } catch (err) {
-      setError(err.response?.data?.message || 'Login failed. Unauthorized access.');
+      setError(getLoginErrorMessage(err));
     } finally {
       setLoading(false);
     }
