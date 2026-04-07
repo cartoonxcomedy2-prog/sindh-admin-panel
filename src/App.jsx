@@ -33,45 +33,98 @@ const parseStoredAdmin = () => {
 };
 
 function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(
-    !!(localStorage.getItem('token') || sessionStorage.getItem('token'))
-  );
-  const [admin, setAdmin] = useState(parseStoredAdmin());
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [admin, setAdmin] = useState({});
+  const [authChecking, setAuthChecking] = useState(true);
 
-  useEffect(() => {
-    // Sync auth state and VERIFY with server on load
-    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-    const storedAdmin = localStorage.getItem('admin') || sessionStorage.getItem('admin');
-    
-    if (token && storedAdmin) {
-      setIsAuthenticated(true);
-      setAdmin(parseStoredAdmin());
-      
-      // Verify token is still valid with server
-      fetchProfile().catch(() => {
-        // If profile fetch fails (e.g. 401), logout automatically
-        handleLogout();
-      });
-    }
-  }, []);
-
-  const handleLogout = () => {
+  const clearSession = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('admin');
     sessionStorage.removeItem('token');
     sessionStorage.removeItem('admin');
+  };
+
+  const handleLogout = () => {
+    clearSession();
     setIsAuthenticated(false);
     setAdmin({});
+    setAuthChecking(false);
   };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const verifySession = async () => {
+      const token =
+        localStorage.getItem('token') || sessionStorage.getItem('token');
+      const storedAdmin =
+        localStorage.getItem('admin') || sessionStorage.getItem('admin');
+
+      if (!token || !storedAdmin) {
+        if (!isMounted) return;
+        setIsAuthenticated(false);
+        setAdmin({});
+        setAuthChecking(false);
+        return;
+      }
+
+      try {
+        const res = await fetchProfile();
+        const profile = res?.data || parseStoredAdmin();
+        if (!profile || profile.role === 'user') {
+          throw new Error('Unauthorized role');
+        }
+
+        if (!isMounted) return;
+        setAdmin(profile);
+        setIsAuthenticated(true);
+
+        if (localStorage.getItem('token')) {
+          localStorage.setItem('admin', JSON.stringify(profile));
+        }
+        if (sessionStorage.getItem('token')) {
+          sessionStorage.setItem('admin', JSON.stringify(profile));
+        }
+      } catch {
+        if (!isMounted) return;
+        clearSession();
+        setIsAuthenticated(false);
+        setAdmin({});
+      } finally {
+        if (isMounted) setAuthChecking(false);
+      }
+    };
+
+    verifySession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   return (
     <Router>
-      {!isAuthenticated ? (
+      {authChecking ? (
+        <AuthLoadingScreen />
+      ) : !isAuthenticated ? (
         <Login setAuth={setIsAuthenticated} setAdmin={setAdmin} />
       ) : (
         <AdminLayout admin={admin} onLogout={handleLogout} />
       )}
     </Router>
+  );
+}
+
+function AuthLoadingScreen() {
+  return (
+    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
+      <div className="bg-white border border-slate-200 rounded-2xl px-6 py-5 shadow-sm text-center">
+        <div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-teal-500 animate-spin" />
+        <p className="mt-3 text-sm font-semibold text-slate-600">
+          Verifying session...
+        </p>
+      </div>
+    </div>
   );
 }
 
