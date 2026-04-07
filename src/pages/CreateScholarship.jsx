@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import API from '../api';
+import API, { resolveAssetUrl } from '../api';
 import imageCompression from 'browser-image-compression';
 import { getStates, getCities, getCurrency } from '../data/locations';
 import { BACHELOR_PROGRAMS, MASTER_PROGRAMS } from '../data/programs';
@@ -652,7 +652,7 @@ export default function CreateScholarship() {
           <div className="image-upload-area">
             <input type="file" accept="image/*" onChange={handleImageChange} />
             {thumbnailPreview ? (
-              <img src={thumbnailPreview.startsWith('http') || thumbnailPreview.startsWith('data:') ? thumbnailPreview : `http://localhost:5000${thumbnailPreview.startsWith('/') ? '' : '/'}${thumbnailPreview}`} alt="Preview" className="upload-preview" />
+              <img src={resolveAssetUrl(thumbnailPreview)} alt="Preview" className="upload-preview" />
             ) : (
               <div className="upload-placeholder">
                 <span className="upload-icon">📷</span>

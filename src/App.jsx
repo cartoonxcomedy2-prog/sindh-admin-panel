@@ -22,9 +22,21 @@ import AdminDashboard from './pages/AdminDashboard'; // Integrated Overview Page
 import Login from './pages/Login'; // Unified Login Page
 import { fetchProfile } from './api';
 
+const parseStoredAdmin = () => {
+  try {
+    const raw =
+      localStorage.getItem('admin') || sessionStorage.getItem('admin') || '{}';
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+};
+
 function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(!!(localStorage.getItem('token') || sessionStorage.getItem('token')));
-  const [admin, setAdmin] = useState(JSON.parse(localStorage.getItem('admin') || sessionStorage.getItem('admin') || '{}'));
+  const [isAuthenticated, setIsAuthenticated] = useState(
+    !!(localStorage.getItem('token') || sessionStorage.getItem('token'))
+  );
+  const [admin, setAdmin] = useState(parseStoredAdmin());
 
   useEffect(() => {
     // Sync auth state and VERIFY with server on load
@@ -33,7 +45,7 @@ function App() {
     
     if (token && storedAdmin) {
       setIsAuthenticated(true);
-      setAdmin(JSON.parse(storedAdmin));
+      setAdmin(parseStoredAdmin());
       
       // Verify token is still valid with server
       fetchProfile().catch(() => {

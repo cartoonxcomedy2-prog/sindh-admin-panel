@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, Image as ImageIcon, Loader2, Pencil, X } from 'lucide-react';
-import API from '../api';
+import API, { resolveAssetUrl } from '../api';
 import imageCompression from 'browser-image-compression';
 
 const getBannerItems = (payload) => {
@@ -19,9 +19,6 @@ const Banners = () => {
   const [preview, setPreview] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editingImageUrl, setEditingImageUrl] = useState('');
-
-  const API_BASE = (API.defaults.baseURL || '').replace(/\/$/, '');
-  const SERVER_URL = API_BASE.endsWith('/api') ? API_BASE.slice(0, -4) : API_BASE;
 
   useEffect(() => {
     fetchBanners();
@@ -136,16 +133,7 @@ const Banners = () => {
   };
 
   const buildBannerImageUrl = (imageUrl) => {
-    if (!imageUrl) return '';
-    const raw = imageUrl.toString();
-    const httpIdx = raw.indexOf('http://');
-    const httpsIdx = raw.indexOf('https://');
-    const realUrlIdx = (httpIdx !== -1 && (httpsIdx === -1 || httpIdx < httpsIdx)) ? httpIdx : httpsIdx;
-    if (realUrlIdx !== -1) return raw.substring(realUrlIdx);
-    
-    if (imageUrl.startsWith('data:')) return imageUrl;
-    if (imageUrl.startsWith('/uploads/')) return `${SERVER_URL}${imageUrl}`;
-    return `${SERVER_URL}/uploads/${imageUrl}`;
+    return resolveAssetUrl(imageUrl);
   };
 
   if (loading) {

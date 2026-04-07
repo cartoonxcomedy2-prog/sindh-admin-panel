@@ -1093,10 +1093,10 @@ export default function Applicants() {
                 <button 
                   onClick={async (e) => {
                     const btn = e.currentTarget;
-                    const originalText = btn.innerHTML;
+                    const originalText = btn.textContent;
                     try {
                       btn.disabled = true;
-                      btn.innerHTML = '<span>⏳</span> Bundling...';
+                      btn.textContent = 'Bundling...';
                       const res = await API.get(`/applications/${currentAppForModal._id}/download-bundle`, {
                         responseType: 'blob'
                       });
@@ -1112,7 +1112,7 @@ export default function Applicants() {
                       alert('Download Failed.');
                     } finally {
                       btn.disabled = false;
-                      btn.innerHTML = originalText;
+                      btn.textContent = originalText;
                     }
                   }}
                   style={{

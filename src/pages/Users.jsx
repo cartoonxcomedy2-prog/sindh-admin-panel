@@ -1,30 +1,59 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import API from '../api';
 
 export default function Users() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pagination, setPagination] = useState({
+    total: 0,
+    totalPages: 1,
+    limit: 20,
+  });
 
-  const fetchData = async () => {
+  const fetchData = async (page = currentPage, search = searchTerm) => {
     setLoading(true);
     try {
-      const res = await API.get('/users');
+      const params = {
+        page,
+        limit: pagination.limit,
+      };
+      const trimmedSearch = search.trim();
+      if (trimmedSearch) params.search = trimmedSearch;
+
+      const res = await API.get('/users', { params });
+      const serverPagination = res.data?.pagination || {};
       setData(res.data.data || []);
+      setPagination((prev) => ({
+        ...prev,
+        total: serverPagination.total ?? (res.data.data || []).length,
+        totalPages: serverPagination.totalPages ?? 1,
+      }));
     } catch {
       setData([]);
+      setPagination((prev) => ({
+        ...prev,
+        total: 0,
+        totalPages: 1,
+      }));
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchData(currentPage, searchTerm);
+    }, 220);
+    return () => clearTimeout(timer);
+  }, [currentPage, searchTerm]);
 
   const handleDelete = async (id) => {
     if (!confirm('Delete this user?')) return;
     try {
       await API.delete(`/users/${id}`);
-      fetchData();
+      fetchData(currentPage, searchTerm);
     } catch {
       alert('Delete failed');
     }
@@ -43,19 +72,11 @@ export default function Users() {
       await API.put(`/users/${editingUser._id}/profile`, editingUser);
       alert('User updated successfully');
       setShowEditModal(false);
-      fetchData();
+      fetchData(currentPage, searchTerm);
     } catch (err) {
       alert('Update failed: ' + (err.response?.data?.message || err.message));
     }
   };
-
-  const filteredData = useMemo(() => {
-    return data.filter(u => 
-      u.name?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      u.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.country?.toLowerCase().includes(searchTerm.toLowerCase())
-    ).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  }, [data, searchTerm]);
 
   return (
     <div style={{ padding: '0px' }}>
@@ -75,7 +96,7 @@ export default function Users() {
                <p style={{ margin: '4px 0 0 0', fontSize: 13, color: '#64748b' }}>Manage student accounts, credentials and profiles.</p>
             </div>
             <span className="badge badge-active" style={{ fontSize: 14, padding: '8px 16px', borderRadius: 12, background: 'rgba(79, 70, 229, 0.1)', color: 'var(--primary)', fontWeight: 800 }}>
-              Total Students: {filteredData.length}
+              Total Students: {pagination.total}
             </span>
           </div>
 
@@ -86,7 +107,10 @@ export default function Users() {
                 type="text" 
                 placeholder="Search by student name, email or country..." 
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(e) => {
+                  setCurrentPage(1);
+                  setSearchTerm(e.target.value);
+                }}
                 style={{ 
                   width: '100%', 
                   padding: '14px 14px 14px 48px', 
@@ -106,7 +130,7 @@ export default function Users() {
 
         {loading ? (
           <div className="loading" style={{ padding: '60px' }}><div className="spinner"></div> Loading students database...</div>
-        ) : filteredData.length === 0 ? (
+        ) : data.length === 0 ? (
           <div className="empty-msg" style={{ padding: '60px', background: 'white' }}>
             {searchTerm ? 'No students found matching your search.' : 'No students registered yet.'}
           </div>
@@ -124,7 +148,7 @@ export default function Users() {
                 </tr>
               </thead>
               <tbody>
-                {filteredData.map((u) => (
+                {data.map((u) => (
                   <tr key={u._id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                     <td style={{ padding: '15px 24px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -173,6 +197,40 @@ export default function Users() {
                 ))}
               </tbody>
             </table>
+            {pagination.totalPages > 1 && (
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '16px 20px',
+                  borderTop: '1px solid #f1f5f9',
+                }}
+              >
+                <button
+                  className="btn-pagination"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                >
+                  Previous
+                </button>
+                <span style={{ fontSize: 13, color: '#475569', fontWeight: 700 }}>
+                  Page {currentPage} of {pagination.totalPages}
+                </span>
+                <button
+                  className="btn-pagination"
+                  onClick={() =>
+                    setCurrentPage((prev) =>
+                      Math.min(pagination.totalPages, prev + 1)
+                    )
+                  }
+                  disabled={currentPage >= pagination.totalPages}
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

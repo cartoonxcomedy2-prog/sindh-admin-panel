@@ -17,7 +17,10 @@ export default function LoginPage({ setAuth, setAdmin }) {
     setError('');
     setLoading(true);
     try {
-      const res = await API.post('/users/login', { email, password });
+      const res = await API.post('/users/login', {
+        email: email.trim().toLowerCase(),
+        password,
+      });
       const { token, ...adminData } = res.data;
       
       if (adminData.role === 'user') {
@@ -26,6 +29,11 @@ export default function LoginPage({ setAuth, setAdmin }) {
         return;
       }
       
+      localStorage.removeItem('token');
+      localStorage.removeItem('admin');
+      sessionStorage.removeItem('token');
+      sessionStorage.removeItem('admin');
+
       const storage = rememberMe ? localStorage : sessionStorage;
       storage.setItem('token', token);
       storage.setItem('admin', JSON.stringify(adminData));

@@ -9,6 +9,12 @@ const getArrayFromResponse = (payload) => {
   return [];
 };
 
+const getCountFromResponse = (payload) => {
+  if (typeof payload?.data?.total === 'number') return payload.data.total;
+  if (typeof payload?.total === 'number') return payload.total;
+  return getArrayFromResponse(payload).length;
+};
+
 export default function AdminDashboard({ admin }) {
   const navigate = useNavigate();
   const [stats, setStats] = useState({
@@ -30,7 +36,7 @@ export default function AdminDashboard({ admin }) {
         const fetchers = [];
         if (isSuperAdmin || isUniAdmin) fetchers.push(API.get('/universities/admin/list').catch(() => null));
         if (isSuperAdmin || isScholAdmin) fetchers.push(API.get('/scholarships/admin/list').catch(() => null));
-        if (isSuperAdmin) fetchers.push(API.get('/users').catch(() => null));
+        if (isSuperAdmin) fetchers.push(API.get('/users', { params: { page: 1, limit: 1 } }).catch(() => null));
         if (isSuperAdmin) fetchers.push(API.get('/applications/total').catch(() => null));
 
         const results = await Promise.all(fetchers);
@@ -44,8 +50,11 @@ export default function AdminDashboard({ admin }) {
 
         const universities = uniIdx !== -1 ? getArrayFromResponse(results[uniIdx]?.data) : [];
         const scholarships = scholarIdx !== -1 ? getArrayFromResponse(results[scholarIdx]?.data) : [];
-        const users = userIdx !== -1 ? getArrayFromResponse(results[userIdx]?.data) : [];
-        const apps = appIdx !== -1 ? getArrayFromResponse(results[appIdx]?.data) : [];
+        const usersCount =
+          userIdx !== -1
+            ? (results[userIdx]?.data?.pagination?.total ?? getArrayFromResponse(results[userIdx]?.data).length)
+            : 0;
+        const appCount = appIdx !== -1 ? getCountFromResponse(results[appIdx]?.data) : 0;
 
         let institutionalApps = 0;
         if (!isSuperAdmin) {
@@ -60,8 +69,8 @@ export default function AdminDashboard({ admin }) {
         setStats({
           universities: universities.length,
           scholarships: scholarships.length,
-          users: users.length,
-          applications: isSuperAdmin ? apps.length : institutionalApps
+          users: usersCount,
+          applications: isSuperAdmin ? appCount : institutionalApps
         });
       } catch {
         setStats({ universities: 0, scholarships: 0, users: 0, applications: 0 });

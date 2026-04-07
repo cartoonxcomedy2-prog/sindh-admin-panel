@@ -1,12 +1,31 @@
 import axios from 'axios';
 
+const ENV_API_BASE = import.meta.env.VITE_API_BASE_URL;
+const DEFAULT_API_BASE = 'https://sindh-backend-api.onrender.com/api';
+
+const normalizeApiBase = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return DEFAULT_API_BASE;
+  return raw.replace(/\/+$/, '');
+};
+
+const getStoredToken = () =>
+  localStorage.getItem('token') || sessionStorage.getItem('token') || '';
+
+const clearStoredSession = () => {
+  localStorage.removeItem('token');
+  localStorage.removeItem('admin');
+  sessionStorage.removeItem('token');
+  sessionStorage.removeItem('admin');
+};
+
 const API = axios.create({
-  baseURL: 'https://sindh-backend-api.onrender.com/api',
+  baseURL: normalizeApiBase(ENV_API_BASE || DEFAULT_API_BASE),
 });
 
 // Add a request interceptor to include the auth token
 API.interceptors.request.use((req) => {
-  const token = localStorage.getItem('token');
+  const token = getStoredToken();
   if (token) {
     req.headers.Authorization = `Bearer ${token}`;
   }
@@ -20,14 +39,37 @@ API.interceptors.response.use(
     if (error.response && error.response.status === 401) {
       // Clear session only if we are not on the login page (to avoid infinite loops)
       if (!window.location.pathname.includes('/login')) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('admin');
+        clearStoredSession();
         window.location.href = '/'; 
       }
     }
     return Promise.reject(error);
   }
 );
+
+export const getServerBaseUrl = () => {
+  const base = normalizeApiBase(API.defaults.baseURL || DEFAULT_API_BASE);
+  return base.endsWith('/api') ? base.slice(0, -4) : base;
+};
+
+export const resolveAssetUrl = (value) => {
+  if (!value) return '';
+  const raw = value.toString();
+  const httpIdx = raw.indexOf('http://');
+  const httpsIdx = raw.indexOf('https://');
+  const realUrlIdx =
+    httpIdx !== -1 && (httpsIdx === -1 || httpIdx < httpsIdx)
+      ? httpIdx
+      : httpsIdx;
+
+  if (realUrlIdx !== -1) return raw.substring(realUrlIdx);
+  if (raw.startsWith('data:')) return raw;
+
+  const server = getServerBaseUrl();
+  if (raw.startsWith('/uploads/')) return `${server}${raw}`;
+  if (raw.startsWith('uploads/')) return `${server}/${raw}`;
+  return `${server}/uploads/${raw}`;
+};
 
 // Auth
 export const login = (formData) => API.post('/users/login', formData);

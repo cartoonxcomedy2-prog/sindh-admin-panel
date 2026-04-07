@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import API from '../api';
+import API, { resolveAssetUrl } from '../api';
 import { getStates, getCities } from '../data/locations';
 
 const ADMIN_COUNTRY = 'Pakistan';
@@ -14,8 +14,13 @@ export default function ScholarHistory() {
   const [filterState, setFilterState] = useState('');
   const [filterCity, setFilterCity] = useState('');
 
-  const adminInfoStr = localStorage.getItem('admin');
-  const adminInfo = adminInfoStr ? JSON.parse(adminInfoStr) : null;
+  const adminInfoStr = localStorage.getItem('admin') || sessionStorage.getItem('admin');
+  let adminInfo = null;
+  try {
+    adminInfo = adminInfoStr ? JSON.parse(adminInfoStr) : null;
+  } catch {
+    adminInfo = null;
+  }
   const isSuperAdmin = adminInfo?.role === 'admin';
 
   const navigate = useNavigate();
@@ -128,20 +133,10 @@ export default function ScholarHistory() {
     }
   };
 
-  const resolveUploadUrl = (value) => {
-    if (!value) return '';
-    const raw = value.toString();
-    const httpIdx = raw.indexOf('http://');
-    const httpsIdx = raw.indexOf('https://');
-    const realUrlIdx = (httpIdx !== -1 && (httpsIdx === -1 || httpIdx < httpsIdx)) ? httpIdx : httpsIdx;
-    if (realUrlIdx !== -1) return raw.substring(realUrlIdx);
-    return `${API.defaults.baseURL.replace('/api', '')}/uploads/${value}`;
-  };
-
   const renderThumbnail = (s) => {
     const thumb = s.thumbnail || s.image;
     if (thumb) {
-      const src = resolveUploadUrl(thumb);
+      const src = resolveAssetUrl(thumb);
       return <img src={src} alt={s.title} />;
     }
     return <span style={{ fontSize: 20 }}>🎓</span>;
