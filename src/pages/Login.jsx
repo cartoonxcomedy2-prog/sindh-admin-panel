@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Lock, Mail, ShieldCheck, Eye, EyeOff, Loader2 } from 'lucide-react';
 import API from '../api';
 
@@ -11,6 +11,7 @@ export default function LoginPage({ setAuth, setAdmin }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
+  const location = useLocation();
 
   const getLoginErrorMessage = (err) => {
     const status = err?.response?.status;
@@ -63,8 +64,14 @@ export default function LoginPage({ setAuth, setAdmin }) {
       setAdmin(adminData);
       setAuth(true);
       
-      // Ensure route replacement to avoid login page in history.
-      navigate('/', { replace: true });
+      const params = new URLSearchParams(location.search || '');
+      const nextPathRaw = params.get('next') || '/';
+      const nextPath =
+        typeof nextPathRaw === 'string' && nextPathRaw.startsWith('/')
+          ? nextPathRaw
+          : '/';
+
+      navigate(nextPath, { replace: true });
     } catch (err) {
       setError(getLoginErrorMessage(err));
     } finally {

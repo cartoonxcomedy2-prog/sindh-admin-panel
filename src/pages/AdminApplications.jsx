@@ -1,5 +1,4 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import API from '../api';
 import imageCompression from 'browser-image-compression';
 import { getStates, getCities } from '../data/locations';
@@ -18,7 +17,6 @@ const getFileUrl = (fileName) => {
 };
 
 export default function AdminApplications() {
-  const navigate = useNavigate();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -30,7 +28,12 @@ export default function AdminApplications() {
   const [currentPage, setCurrentPage] = useState(1);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const itemsPerPage = 10;
+  const [serverPagination, setServerPagination] = useState({
+    page: 1,
+    limit: 20,
+    total: 0,
+    totalPages: 1,
+  });
 
   // Modal State
   const [showModal, setShowModal] = useState(false); // For Manage Universities (Scholarships)
@@ -48,19 +51,68 @@ export default function AdminApplications() {
   const fetchApplicants = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await API.get('/applications/admin/list');
+      const res = await API.get('/applications/admin/list', {
+        params: {
+          page: currentPage,
+          limit: serverPagination.limit,
+          search: searchTerm || undefined,
+          status: statusFilter || undefined,
+          state: filterState || undefined,
+          city: filterCity || undefined,
+          level: levelFilter || undefined,
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+        },
+      });
       setData(res.data.data || []);
+      const pagination = res.data?.pagination || {};
+      setServerPagination((prev) => ({
+        ...prev,
+        page: pagination.page ?? currentPage,
+        limit: pagination.limit ?? prev.limit,
+        total: pagination.total ?? (res.data.data || []).length,
+        totalPages: pagination.totalPages ?? 1,
+      }));
     } catch (err) {
       console.error(err);
       setData([]);
+      setServerPagination((prev) => ({
+        ...prev,
+        total: 0,
+        totalPages: 1,
+      }));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [
+    currentPage,
+    serverPagination.limit,
+    searchTerm,
+    statusFilter,
+    filterState,
+    filterCity,
+    levelFilter,
+    startDate,
+    endDate,
+  ]);
 
   useEffect(() => {
-    fetchApplicants();
+    const timer = setTimeout(() => {
+      fetchApplicants();
+    }, 200);
+    return () => clearTimeout(timer);
   }, [fetchApplicants]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter, filterState, filterCity, levelFilter, startDate, endDate]);
+
+  useEffect(() => {
+    const total = Math.max(serverPagination.totalPages || 1, 1);
+    if (currentPage > total) {
+      setCurrentPage(total);
+    }
+  }, [currentPage, serverPagination.totalPages]);
 
   const handleStatusChange = async (appId, newStatus) => {
     try {
@@ -361,44 +413,8 @@ export default function AdminApplications() {
     }
   };
 
-  // Filtering Logic - Optimized with useMemo
-  const filteredData = useMemo(() => {
-    return data.filter(app => {
-      const query = searchTerm.toLowerCase();
-      const matchesSearch = !query || (
-        app.user?.name?.toLowerCase().includes(query) ||
-        app.user?.email?.toLowerCase().includes(query) ||
-        app.university?.name?.toLowerCase().includes(query) ||
-        app.scholarship?.title?.toLowerCase().includes(query)
-      );
-      const matchesStatus = !statusFilter || app.status === statusFilter;
-      const applicantCountry = app.user?.country || ADMIN_COUNTRY;
-      const matchesCountry = applicantCountry === ADMIN_COUNTRY;
-      const matchesState = !filterState || app.user?.state === filterState;
-      const matchesCity = !filterCity || app.user?.city === filterCity;
-      const matchesLevel =
-        !levelFilter ||
-        app.selectedPrograms?.some((p) =>
-          p.programName?.toLowerCase().includes(levelFilter.toLowerCase())
-        );
-      
-      // Date Range Filter
-      const appDate = new Date(app.appliedAt);
-      const start = startDate ? new Date(startDate) : null;
-      const end = endDate ? new Date(endDate) : null;
-      
-      if (start) {
-        start.setHours(0, 0, 0, 0);
-        if (appDate < start) return false;
-      }
-      if (end) {
-        end.setHours(23, 59, 59, 999);
-        if (appDate > end) return false;
-      }
-      
-      return matchesSearch && matchesStatus && matchesCountry && matchesState && matchesCity && matchesLevel;
-    }).sort((a, b) => new Date(b.appliedAt) - new Date(a.appliedAt));
-  }, [data, searchTerm, statusFilter, filterState, filterCity, levelFilter, startDate, endDate]);
+  // Server returns already filtered and paginated rows.
+  const filteredData = useMemo(() => data, [data]);
 
   const levelCounts = useMemo(() => {
     return data.reduce((acc, app) => {
@@ -414,10 +430,8 @@ export default function AdminApplications() {
 
 
   // Pagination Calculation
-  const indexOfLastItem = currentPage * itemsPerPage;
-  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = filteredData.slice(indexOfFirstItem, indexOfLastItem);
-  const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+  const currentItems = filteredData;
+  const totalPages = Math.max(serverPagination.totalPages || 1, 1);
 
   const getPageNumbers = () => {
     const pageNumbers = [];
@@ -717,7 +731,9 @@ export default function AdminApplications() {
                 </p>
               </div>
             </div>
-            <span className="badge badge-active" style={{ fontSize: 14 }}>Total: {filteredData.length}</span>
+            <span className="badge badge-active" style={{ fontSize: 14 }}>
+              Total: {serverPagination.total}
+            </span>
           </div>
 
           <div className="filter-bar" style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', width: '100%', padding: '16px', background: '#ffffff', border: '1px solid var(--border)', borderRadius: '16px', boxShadow: '0 2px 10px rgba(0,0,0,0.02)' }}>
@@ -789,7 +805,7 @@ export default function AdminApplications() {
               </thead>
               <tbody>
                 {currentItems.map((app, index) => {
-                  const serialNumber = indexOfFirstItem + index + 1;
+                  const serialNumber = ((currentPage - 1) * serverPagination.limit) + index + 1;
                   return (
                     <tr key={app._id}>
                       <td style={{ ...tableBodyCell, color: 'var(--text-secondary)', fontWeight: 'bold' }}>{serialNumber}</td>

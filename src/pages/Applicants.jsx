@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import API from '../api';
 import imageCompression from 'browser-image-compression';
 import { getStates, getCities } from '../data/locations';
@@ -63,7 +63,6 @@ const triggerBlobDownload = (blobData, downloadName) => {
 
 export default function Applicants() {
   const { type, id } = useParams();
-  const navigate = useNavigate();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [targetName, setTargetName] = useState('');
@@ -76,7 +75,12 @@ export default function Applicants() {
   const [currentPage, setCurrentPage] = useState(1);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const itemsPerPage = 10;
+  const [serverPagination, setServerPagination] = useState({
+    page: 1,
+    limit: 20,
+    total: 0,
+    totalPages: 1,
+  });
 
   // Modal State
   const [showModal, setShowModal] = useState(false); // For Manage Universities (Scholarships)
@@ -92,26 +96,91 @@ export default function Applicants() {
   const fetchApplicants = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await API.get(`/applications/${type}/${id}`);
+      const res = await API.get(`/applications/${type}/${id}`, {
+        params: {
+          page: currentPage,
+          limit: serverPagination.limit,
+          search: searchTerm || undefined,
+          status: statusFilter || undefined,
+          state: filterState || undefined,
+          city: filterCity || undefined,
+          program: programFilter || undefined,
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+        },
+      });
       setData(res.data.data || []);
-      
-      const targetRes = await API.get(`/${type === 'university' ? 'universities' : 'scholarships'}/${id}`);
-      const targetData = targetRes.data.data;
-      setTargetName(targetData.name || targetData.title || 'Record');
-      if (type === 'scholarship') {
-        setLinkedUnivs(targetData.linkedUniversities || []);
-      }
+      const pagination = res.data?.pagination || {};
+      setServerPagination((prev) => ({
+        ...prev,
+        page: pagination.page ?? currentPage,
+        limit: pagination.limit ?? prev.limit,
+        total: pagination.total ?? (res.data.data || []).length,
+        totalPages: pagination.totalPages ?? 1,
+      }));
     } catch (err) {
       console.error(err);
       setData([]);
+      setServerPagination((prev) => ({
+        ...prev,
+        total: 0,
+        totalPages: 1,
+      }));
     } finally {
       setLoading(false);
     }
+  }, [
+    type,
+    id,
+    currentPage,
+    serverPagination.limit,
+    searchTerm,
+    statusFilter,
+    filterState,
+    filterCity,
+    programFilter,
+    startDate,
+    endDate,
+  ]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchApplicants();
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [fetchApplicants]);
+
+  useEffect(() => {
+    const fetchTarget = async () => {
+      try {
+        const targetRes = await API.get(`/${type === 'university' ? 'universities' : 'scholarships'}/${id}`);
+        const targetData = targetRes.data.data;
+        setTargetName(targetData.name || targetData.title || 'Record');
+        if (type === 'scholarship') {
+          setLinkedUnivs(targetData.linkedUniversities || []);
+        } else {
+          setLinkedUnivs([]);
+        }
+      } catch (err) {
+        console.error(err);
+        setTargetName('Record');
+        setLinkedUnivs([]);
+      }
+    };
+
+    fetchTarget();
   }, [type, id]);
 
   useEffect(() => {
-    fetchApplicants();
-  }, [fetchApplicants]);
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter, filterState, filterCity, programFilter, startDate, endDate]);
+
+  useEffect(() => {
+    const total = Math.max(serverPagination.totalPages || 1, 1);
+    if (currentPage > total) {
+      setCurrentPage(total);
+    }
+  }, [currentPage, serverPagination.totalPages]);
 
   const handleStatusChange = async (appId, newStatus) => {
     try {
@@ -409,7 +478,7 @@ export default function Applicants() {
 
   const handleSelectAll = (e) => {
     if (e.target.checked) {
-      setSelectedIds(filteredData.map(app => app._id));
+      setSelectedIds(currentItems.map(app => app._id));
     } else {
       setSelectedIds([]);
     }
@@ -442,35 +511,8 @@ export default function Applicants() {
     }
   };
 
-  // Filtering Logic - Optimized with useMemo
-  const filteredData = useMemo(() => {
-    return data.filter(app => {
-      const matchesSearch = app.user?.name?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                           app.user?.email?.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesStatus = !statusFilter || app.status === statusFilter;
-      const applicantCountry = app.user?.country || ADMIN_COUNTRY;
-      const matchesCountry = applicantCountry === ADMIN_COUNTRY;
-      const matchesState = !filterState || app.user?.state === filterState;
-      const matchesCity = !filterCity || app.user?.city === filterCity;
-      const matchesProgram = !programFilter || app.selectedPrograms?.some(p => p.programName === programFilter);
-      
-      // Date Range Filter
-      const appDate = new Date(app.appliedAt);
-      const start = startDate ? new Date(startDate) : null;
-      const end = endDate ? new Date(endDate) : null;
-      
-      if (start) {
-        start.setHours(0, 0, 0, 0);
-        if (appDate < start) return false;
-      }
-      if (end) {
-        end.setHours(23, 59, 59, 999);
-        if (appDate > end) return false;
-      }
-      
-      return matchesSearch && matchesStatus && matchesCountry && matchesState && matchesCity && matchesProgram;
-    }).sort((a, b) => new Date(b.appliedAt) - new Date(a.appliedAt));
-  }, [data, searchTerm, statusFilter, filterState, filterCity, programFilter, startDate, endDate]);
+  // Server returns already filtered and paginated rows.
+  const filteredData = useMemo(() => data, [data]);
 
   // Get all unique programs for the dropdown - Optimized with useMemo
   const allPrograms = useMemo(() => {
@@ -479,10 +521,8 @@ export default function Applicants() {
 
 
   // Pagination Calculation
-  const indexOfLastItem = currentPage * itemsPerPage;
-  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = filteredData.slice(indexOfFirstItem, indexOfLastItem);
-  const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+  const currentItems = filteredData;
+  const totalPages = Math.max(serverPagination.totalPages || 1, 1);
 
   const getPageNumbers = () => {
     const pageNumbers = [];
@@ -827,7 +867,9 @@ export default function Applicants() {
                 </div>
               </div>
             </div>
-            <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>Total Results: {filteredData.length}</span>
+            <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
+              Total Results: {serverPagination.total}
+            </span>
           </div>
 
           <div className="filter-bar" style={{ 
@@ -975,7 +1017,7 @@ export default function Applicants() {
                         <input 
                           type="checkbox" 
                           onChange={handleSelectAll} 
-                          checked={selectedIds.length > 0 && selectedIds.length === filteredData.length}
+                          checked={currentItems.length > 0 && selectedIds.length === currentItems.length}
                           style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#4f46e5' }}
                         />
                         <span>#</span>
@@ -993,7 +1035,7 @@ export default function Applicants() {
               </thead>
               <tbody>
                 {currentItems.map((app, index) => {
-                  const serialNumber = indexOfFirstItem + index + 1;
+                  const serialNumber = ((currentPage - 1) * serverPagination.limit) + index + 1;
                   return (
                     <tr key={app._id} style={{ 
                       background: selectedIds.includes(app._id) ? '#f8fafc' : 'transparent',

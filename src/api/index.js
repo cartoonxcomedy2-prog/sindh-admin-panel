@@ -19,6 +19,15 @@ const clearStoredSession = () => {
   sessionStorage.removeItem('admin');
 };
 
+const redirectToLogin = () => {
+  const path = window.location.pathname || '/';
+  if (path.startsWith('/login')) return;
+
+  const nextPath = `${path}${window.location.search || ''}${window.location.hash || ''}`;
+  const encodedNext = encodeURIComponent(nextPath);
+  window.location.replace(`/login?next=${encodedNext}`);
+};
+
 const API = axios.create({
   baseURL: normalizeApiBase(ENV_API_BASE || DEFAULT_API_BASE),
 });
@@ -36,12 +45,10 @@ API.interceptors.request.use((req) => {
 API.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response && error.response.status === 401) {
-      // Clear session only if we are not on the login page (to avoid infinite loops)
-      if (!window.location.pathname.includes('/login')) {
-        clearStoredSession();
-        window.location.href = '/'; 
-      }
+    const status = error?.response?.status;
+    if (status === 401 || status === 403) {
+      clearStoredSession();
+      redirectToLogin();
     }
     return Promise.reject(error);
   }

@@ -62,7 +62,9 @@ export default function AdminDashboard({ admin }) {
            const entityId = universities[0]?._id || scholarships[0]?._id;
            if (entityId) {
              const res = await API.get(`/applications/${type}/${entityId}`).catch(() => null);
-             institutionalApps = getArrayFromResponse(res?.data).length;
+             institutionalApps =
+               res?.data?.pagination?.total ??
+               getArrayFromResponse(res?.data).length;
            }
         }
 
