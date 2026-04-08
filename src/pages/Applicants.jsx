@@ -61,6 +61,16 @@ const triggerBlobDownload = (blobData, downloadName) => {
   window.URL.revokeObjectURL(blobUrl);
 };
 
+const normalizeId = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    if (value._id) return String(value._id);
+    if (value.id) return String(value.id);
+  }
+  return String(value);
+};
+
 export default function Applicants() {
   const { type, id } = useParams();
   const [data, setData] = useState([]);
@@ -351,7 +361,12 @@ export default function Applicants() {
     }
   };
 
-  const buildApplicationDocDownloadName = ({ field, sourceFile, universityName = '' }) => {
+  const buildApplicationDocDownloadName = ({
+    appId,
+    field,
+    sourceFile,
+    universityName = '',
+  }) => {
     const userName =
       studentData?.name ||
       currentAppForModal?.user?.name ||
@@ -361,6 +376,7 @@ export default function Applicants() {
     const ext = inferFileExtension(sourceFile, '.pdf');
     const parts = [
       sanitizeFileNamePart(userName, 'applicant'),
+      sanitizeFileNamePart(appId, 'application'),
       sanitizeFileNamePart(universityName, ''),
       docLabel,
     ].filter(Boolean);
@@ -376,6 +392,7 @@ export default function Applicants() {
   }) => {
     try {
       const preferredName = buildApplicationDocDownloadName({
+        appId,
         field,
         sourceFile,
         universityName,
@@ -431,7 +448,7 @@ export default function Applicants() {
   const handleDownloadFullBundle = async () => {
     if (!currentAppForModal?._id) return;
     try {
-      const preferredName = `${sanitizeFileNamePart(studentData?.name || 'applicant', 'applicant')}-bundle.zip`;
+      const preferredName = `${sanitizeFileNamePart(studentData?.name || 'applicant', 'applicant')}-${sanitizeFileNamePart(currentAppForModal._id, 'application')}-bundle.zip`;
       const res = await API.get(`/applications/${currentAppForModal._id}/download-bundle`, {
         params: { downloadName: preferredName },
         responseType: 'blob',
@@ -458,13 +475,18 @@ export default function Applicants() {
 
   const toggleUniInApp = async (appId, uniId) => {
     const currentOffered = selectedApp.offeredUniversities || [];
-    const isOffered = currentOffered.some(u => (u.university._id || u.university) === uniId);
+    const targetUniId = normalizeId(uniId);
+    const isOffered = currentOffered.some(
+      (u) => normalizeId(u?.university?._id || u?.university) === targetUniId
+    );
     
     let newList;
     if (isOffered) {
-      newList = currentOffered.filter(u => (u.university._id || u.university) !== uniId);
+      newList = currentOffered.filter(
+        (u) => normalizeId(u?.university?._id || u?.university) !== targetUniId
+      );
     } else {
-      newList = [...currentOffered, { university: uniId, status: 'Applied' }];
+      newList = [...currentOffered, { university: targetUniId, status: 'Applied' }];
     }
 
     try {
@@ -1539,8 +1561,11 @@ export default function Applicants() {
                 <div className="uni-manage-list" style={{ marginBottom: 20 }}>
                   <h4 style={{ marginBottom: 15 }}>🏛️ University Admissions</h4>
                   {linkedUnivs.map(uni => {
-                    const uniId = uni._id || uni;
-                    const offeredData = selectedApp.offeredUniversities?.find(u => (u.university._id || u.university) === uniId);
+                    const uniId = normalizeId(uni._id || uni);
+                    const offeredData = selectedApp.offeredUniversities?.find(
+                      (u) =>
+                        normalizeId(u?.university?._id || u?.university) === uniId
+                    );
                     const isOffered = !!offeredData;
 
                     return (
