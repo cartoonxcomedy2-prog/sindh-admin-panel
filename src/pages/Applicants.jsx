@@ -9,12 +9,33 @@ const ADMIN_COUNTRY = 'Pakistan';
 
 const getFileUrl = (fileName) => {
   if (!fileName) return '';
-  const raw = fileName.toString();
+  const raw = fileName.toString().trim();
   const httpIdx = raw.indexOf('http://');
   const httpsIdx = raw.indexOf('https://');
   const realUrlIdx = (httpIdx !== -1 && (httpsIdx === -1 || httpIdx < httpsIdx)) ? httpIdx : httpsIdx;
-  if (realUrlIdx !== -1) return raw.substring(realUrlIdx);
-  return `${API.defaults.baseURL.replace('/api', '')}/uploads/${fileName}`;
+  const sourceUrl =
+    realUrlIdx !== -1
+      ? raw.substring(realUrlIdx)
+      : `${API.defaults.baseURL.replace('/api', '')}/uploads/${fileName}`;
+
+  try {
+    const parsed = new URL(sourceUrl);
+    const isCloudinary = /cloudinary\.com$/i.test(parsed.hostname);
+    const isDocument = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv)$/i.test(
+      parsed.pathname || ''
+    );
+    if (
+      isCloudinary &&
+      isDocument &&
+      (parsed.pathname || '').includes('/image/upload/')
+    ) {
+      return sourceUrl.replace('/image/upload/', '/raw/upload/');
+    }
+  } catch {
+    // ignore URL parse errors and return source URL
+  }
+
+  return sourceUrl;
 };
 
 const sanitizeFileNamePart = (value, fallback = 'document') => {

@@ -58,11 +58,17 @@ const cloneSerializable = (value) => {
 const shouldCacheGet = (config = {}) => {
   const method = String(config.method || 'get').toLowerCase();
   const responseType = String(config.responseType || '').toLowerCase();
+  const url = String(config.url || '').toLowerCase();
   const skipCache =
     config.skipCache === true || config.headers?.['x-skip-cache'] === 'true';
+  const isSensitiveAuthPath =
+    url.includes('/users/profile') ||
+    url.includes('/users/login') ||
+    url.includes('/users/register');
   return (
     method === 'get' &&
     !skipCache &&
+    !isSensitiveAuthPath &&
     responseType !== 'blob' &&
     responseType !== 'arraybuffer' &&
     GET_CACHE_TTL_MS > 0
