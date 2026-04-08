@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const ENV_API_BASE = import.meta.env.VITE_API_BASE_URL;
-const DEFAULT_API_BASE = 'https://sindh-backend-api.onrender.com/api';
+const DEFAULT_API_BASE = 'https://azlantraders.store/api';
 const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 45000);
 const API_RETRY_DELAY_MS = Number(import.meta.env.VITE_API_RETRY_DELAY_MS || 1500);
 const API_MAX_TIMEOUT_RETRIES = Number(import.meta.env.VITE_API_MAX_TIMEOUT_RETRIES || 1);
