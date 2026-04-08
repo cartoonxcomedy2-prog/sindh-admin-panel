@@ -2,7 +2,9 @@ import axios from 'axios';
 
 const ENV_API_BASE = import.meta.env.VITE_API_BASE_URL;
 const DEFAULT_API_BASE = 'https://sindh-backend-api.onrender.com/api';
-const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 15000);
+const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 45000);
+const API_RETRY_DELAY_MS = Number(import.meta.env.VITE_API_RETRY_DELAY_MS || 1500);
+const API_MAX_TIMEOUT_RETRIES = Number(import.meta.env.VITE_API_MAX_TIMEOUT_RETRIES || 1);
 const GET_CACHE_TTL_MS = Number(import.meta.env.VITE_API_GET_CACHE_TTL_MS || 15000);
 const GET_CACHE_STALE_MS = Number(import.meta.env.VITE_API_GET_CACHE_STALE_MS || 60000);
 const GET_CACHE_MAX_ENTRIES = Number(import.meta.env.VITE_API_GET_CACHE_MAX_ENTRIES || 250);
@@ -97,6 +99,13 @@ const cloneSerializable = (value) => {
   } catch {
     return value;
   }
+};
+
+const isTimeoutLikeError = (error) => {
+  const code = String(error?.code || '').toUpperCase();
+  if (code === 'ECONNABORTED' || code === 'ETIMEDOUT') return true;
+  const message = String(error?.message || '').toLowerCase();
+  return message.includes('timeout');
 };
 
 const shouldCacheGet = (config = {}) => {
@@ -213,6 +222,26 @@ API.interceptors.response.use(
   },
   (error) => {
     const config = error?.config || {};
+    const method = String(config.method || 'get').toLowerCase();
+    const timeoutRetries = Number(config.__timeoutRetryCount || 0);
+    const canRetry =
+      method === 'get' &&
+      Number.isFinite(API_MAX_TIMEOUT_RETRIES) &&
+      API_MAX_TIMEOUT_RETRIES > 0 &&
+      timeoutRetries < API_MAX_TIMEOUT_RETRIES &&
+      isTimeoutLikeError(error);
+
+    if (canRetry) {
+      config.__timeoutRetryCount = timeoutRetries + 1;
+      const retryDelay = Number.isFinite(API_RETRY_DELAY_MS) && API_RETRY_DELAY_MS > 0
+        ? API_RETRY_DELAY_MS
+        : 0;
+
+      return new Promise((resolve) => setTimeout(resolve, retryDelay)).then(() =>
+        API.request(config)
+      );
+    }
+
     if (shouldCacheGet(config) && !error?.response) {
       const cacheKey = config.__clientCacheKey || buildGetCacheKey(config);
       const cached = getCacheStore.get(cacheKey);
