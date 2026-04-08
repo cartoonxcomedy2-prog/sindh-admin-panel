@@ -22,6 +22,11 @@ import AdminDashboard from './pages/AdminDashboard'; // Integrated Overview Page
 import Login from './pages/Login'; // Unified Login Page
 import { clearApiGetCache, fetchProfile } from './api';
 
+const ADMIN_SESSION_STARTED_AT_KEY = 'admin_session_started_at';
+const ADMIN_SESSION_MAX_AGE_MS = Number(
+  import.meta.env.VITE_ADMIN_SESSION_MAX_AGE_MS || 8 * 60 * 60 * 1000
+);
+
 const parseStoredAdmin = () => {
   try {
     const raw =
@@ -32,16 +37,43 @@ const parseStoredAdmin = () => {
   }
 };
 
+const clearStorageSession = (storage) => {
+  storage.removeItem('token');
+  storage.removeItem('admin');
+  storage.removeItem(ADMIN_SESSION_STARTED_AT_KEY);
+};
+
+const hasValidStorageSession = (storage) => {
+  const token = String(storage.getItem('token') || '').trim();
+  if (!token) return false;
+  const startedAt = Number(storage.getItem(ADMIN_SESSION_STARTED_AT_KEY) || 0);
+  if (!Number.isFinite(startedAt) || startedAt <= 0) {
+    clearStorageSession(storage);
+    return false;
+  }
+  if (Date.now() - startedAt > ADMIN_SESSION_MAX_AGE_MS) {
+    clearStorageSession(storage);
+    return false;
+  }
+  return true;
+};
+
+const getActiveSessionStorage = () => {
+  for (const storage of [localStorage, sessionStorage]) {
+    if (!hasValidStorageSession(storage)) continue;
+    return storage;
+  }
+  return null;
+};
+
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [admin, setAdmin] = useState({});
   const [authChecking, setAuthChecking] = useState(true);
 
   const clearSession = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('admin');
-    sessionStorage.removeItem('token');
-    sessionStorage.removeItem('admin');
+    clearStorageSession(localStorage);
+    clearStorageSession(sessionStorage);
     clearApiGetCache();
   };
 
@@ -56,10 +88,9 @@ function App() {
     let isMounted = true;
 
     const verifySession = async () => {
-      const token =
-        localStorage.getItem('token') || sessionStorage.getItem('token');
-      const storedAdmin =
-        localStorage.getItem('admin') || sessionStorage.getItem('admin');
+      const activeStorage = getActiveSessionStorage();
+      const token = activeStorage?.getItem('token') || '';
+      const storedAdmin = activeStorage?.getItem('admin') || '';
 
       if (!token || !storedAdmin) {
         if (!isMounted) return;
@@ -80,11 +111,8 @@ function App() {
         setAdmin(profile);
         setIsAuthenticated(true);
 
-        if (localStorage.getItem('token')) {
-          localStorage.setItem('admin', JSON.stringify(profile));
-        }
-        if (sessionStorage.getItem('token')) {
-          sessionStorage.setItem('admin', JSON.stringify(profile));
+        if (activeStorage) {
+          activeStorage.setItem('admin', JSON.stringify(profile));
         }
       } catch {
         if (!isMounted) return;

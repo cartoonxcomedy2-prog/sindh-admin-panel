@@ -3,6 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Lock, Mail, ShieldCheck, Eye, EyeOff, Loader2 } from 'lucide-react';
 import API from '../api';
 
+const ADMIN_SESSION_STARTED_AT_KEY = 'admin_session_started_at';
+
 export default function LoginPage({ setAuth, setAdmin }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -54,12 +56,15 @@ export default function LoginPage({ setAuth, setAdmin }) {
       
       localStorage.removeItem('token');
       localStorage.removeItem('admin');
+      localStorage.removeItem(ADMIN_SESSION_STARTED_AT_KEY);
       sessionStorage.removeItem('token');
       sessionStorage.removeItem('admin');
+      sessionStorage.removeItem(ADMIN_SESSION_STARTED_AT_KEY);
 
       const storage = rememberMe ? localStorage : sessionStorage;
       storage.setItem('token', token);
       storage.setItem('admin', JSON.stringify(adminData));
+      storage.setItem(ADMIN_SESSION_STARTED_AT_KEY, Date.now().toString());
       
       setAdmin(adminData);
       setAuth(true);

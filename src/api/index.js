@@ -5,6 +5,10 @@ const DEFAULT_API_BASE = 'https://sindh-backend-api.onrender.com/api';
 const GET_CACHE_TTL_MS = Number(import.meta.env.VITE_API_GET_CACHE_TTL_MS || 15000);
 const GET_CACHE_STALE_MS = Number(import.meta.env.VITE_API_GET_CACHE_STALE_MS || 60000);
 const GET_CACHE_MAX_ENTRIES = Number(import.meta.env.VITE_API_GET_CACHE_MAX_ENTRIES || 250);
+const ADMIN_SESSION_STARTED_AT_KEY = 'admin_session_started_at';
+const ADMIN_SESSION_MAX_AGE_MS = Number(
+  import.meta.env.VITE_ADMIN_SESSION_MAX_AGE_MS || 8 * 60 * 60 * 1000
+);
 const getCacheStore = new Map();
 
 const normalizeApiBase = (value) => {
@@ -13,14 +17,40 @@ const normalizeApiBase = (value) => {
   return raw.replace(/\/+$/, '');
 };
 
-const getStoredToken = () =>
-  localStorage.getItem('token') || sessionStorage.getItem('token') || '';
+const clearStorageSession = (storage) => {
+  storage.removeItem('token');
+  storage.removeItem('admin');
+  storage.removeItem(ADMIN_SESSION_STARTED_AT_KEY);
+};
+
+const hasValidStorageSession = (storage) => {
+  const token = String(storage.getItem('token') || '').trim();
+  if (!token) return false;
+  const startedAtRaw = storage.getItem(ADMIN_SESSION_STARTED_AT_KEY);
+  const startedAt = Number(startedAtRaw || 0);
+  if (!Number.isFinite(startedAt) || startedAt <= 0) {
+    clearStorageSession(storage);
+    return false;
+  }
+  if (Date.now() - startedAt > ADMIN_SESSION_MAX_AGE_MS) {
+    clearStorageSession(storage);
+    return false;
+  }
+  return true;
+};
+
+const getStoredToken = () => {
+  for (const storage of [localStorage, sessionStorage]) {
+    if (!hasValidStorageSession(storage)) continue;
+    const token = String(storage.getItem('token') || '').trim();
+    if (token) return token;
+  }
+  return '';
+};
 
 const clearStoredSession = () => {
-  localStorage.removeItem('token');
-  localStorage.removeItem('admin');
-  sessionStorage.removeItem('token');
-  sessionStorage.removeItem('admin');
+  clearStorageSession(localStorage);
+  clearStorageSession(sessionStorage);
 };
 
 const redirectToLogin = () => {

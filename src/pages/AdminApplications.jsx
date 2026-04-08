@@ -6,16 +6,19 @@ import { getStates, getCities } from '../data/locations';
 const ALL_STATUSES = ['Applied', 'Admit Card', 'Test', 'Interview', 'Selected', 'Rejected'];
 const ADMIN_COUNTRY = 'Pakistan';
 
+const extractEmbeddedUrl = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const matched = raw.match(/https?:\/\/[^\s"<>]+/i);
+  if (!matched?.[0]) return '';
+  return matched[0].replace(/[\],);.]+$/g, '');
+};
+
 const getFileUrl = (fileName) => {
   if (!fileName) return '';
   const raw = fileName.toString().trim();
-  const httpIdx = raw.indexOf('http://');
-  const httpsIdx = raw.indexOf('https://');
-  const realUrlIdx = (httpIdx !== -1 && (httpsIdx === -1 || httpIdx < httpsIdx)) ? httpIdx : httpsIdx;
-  const sourceUrl =
-    realUrlIdx !== -1
-      ? raw.substring(realUrlIdx)
-      : `${API.defaults.baseURL.replace('/api', '')}/uploads/${fileName}`;
+  const embedded = extractEmbeddedUrl(raw);
+  const sourceUrl = embedded || `${API.defaults.baseURL.replace('/api', '')}/uploads/${fileName}`;
 
   try {
     const parsed = new URL(sourceUrl);
@@ -37,6 +40,41 @@ const getFileUrl = (fileName) => {
   return sourceUrl;
 };
 
+const buildDirectDownloadCandidates = (sourceFile) => {
+  const candidates = [];
+  const seen = new Set();
+  const addCandidate = (value) => {
+    const normalized = String(value || '').trim();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    candidates.push(normalized);
+  };
+
+  addCandidate(extractEmbeddedUrl(sourceFile));
+  addCandidate(getFileUrl(sourceFile));
+
+  for (const current of [...candidates]) {
+    try {
+      const parsed = new URL(current);
+      const isCloudinary = /cloudinary\.com$/i.test(parsed.hostname);
+      const isDocument = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv)$/i.test(
+        parsed.pathname || ''
+      );
+      if (
+        isCloudinary &&
+        isDocument &&
+        (parsed.pathname || '').includes('/image/upload/')
+      ) {
+        addCandidate(current.replace('/image/upload/', '/raw/upload/'));
+      }
+    } catch {
+      // ignore parse errors for malformed candidates
+    }
+  }
+
+  return candidates.filter((url) => /^https?:\/\//i.test(url));
+};
+
 const sanitizeFileNamePart = (value, fallback = 'document') => {
   const cleaned = String(value || '')
     .trim()
@@ -52,15 +90,12 @@ const inferFileExtension = (value, fallback = '.pdf') => {
   if (!raw) return fallback;
 
   let pathname = raw;
-  const httpIdx = raw.indexOf('http://');
-  const httpsIdx = raw.indexOf('https://');
-  const urlIdx =
-    httpIdx !== -1 && (httpsIdx === -1 || httpIdx < httpsIdx) ? httpIdx : httpsIdx;
-  if (urlIdx !== -1) {
+  const embedded = extractEmbeddedUrl(raw);
+  if (embedded) {
     try {
-      pathname = new URL(raw.substring(urlIdx)).pathname || raw;
+      pathname = new URL(embedded).pathname || raw;
     } catch {
-      pathname = raw;
+      pathname = embedded;
     }
   }
 
@@ -80,6 +115,15 @@ const triggerBlobDownload = (blobData, downloadName) => {
   link.click();
   link.remove();
   window.URL.revokeObjectURL(blobUrl);
+};
+
+const downloadFromDirectUrl = async (url, downloadName) => {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error('File does not exist on server');
+  }
+  const blob = await response.blob();
+  triggerBlobDownload(blob, downloadName);
 };
 
 const parseDownloadError = async (err, fallback = 'Failed to download document') => {
@@ -432,6 +476,22 @@ export default function AdminApplications() {
     } catch (err) {
       console.error('Application document download failed:', err);
       const message = await parseDownloadError(err);
+      const lower = String(message || '').toLowerCase();
+      const shouldTryDirect =
+        lower.includes('document not found') ||
+        lower.includes('file does not exist on server') ||
+        lower.includes('not available');
+      if (shouldTryDirect) {
+        const candidates = buildDirectDownloadCandidates(sourceFile);
+        for (const candidate of candidates) {
+          try {
+            await downloadFromDirectUrl(candidate, preferredName);
+            return;
+          } catch (directErr) {
+            console.error('Direct download fallback failed:', directErr);
+          }
+        }
+      }
       alert(message);
     }
   };
