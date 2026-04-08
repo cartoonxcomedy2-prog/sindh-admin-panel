@@ -2,6 +2,7 @@ import axios from 'axios';
 
 const ENV_API_BASE = import.meta.env.VITE_API_BASE_URL;
 const DEFAULT_API_BASE = 'https://sindh-backend-api.onrender.com/api';
+const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 15000);
 const GET_CACHE_TTL_MS = Number(import.meta.env.VITE_API_GET_CACHE_TTL_MS || 15000);
 const GET_CACHE_STALE_MS = Number(import.meta.env.VITE_API_GET_CACHE_STALE_MS || 60000);
 const GET_CACHE_MAX_ENTRIES = Number(import.meta.env.VITE_API_GET_CACHE_MAX_ENTRIES || 250);
@@ -53,12 +54,25 @@ const clearStoredSession = () => {
   clearStorageSession(sessionStorage);
 };
 
-const redirectToLogin = () => {
+const getCurrentAppPath = () => {
+  const hash = String(window.location.hash || '');
+  if (hash.startsWith('#/')) {
+    return hash.slice(1) || '/';
+  }
   const path = window.location.pathname || '/';
-  if (path.startsWith('/login')) return;
+  return `${path}${window.location.search || ''}${window.location.hash || ''}`;
+};
 
-  const nextPath = `${path}${window.location.search || ''}${window.location.hash || ''}`;
-  const encodedNext = encodeURIComponent(nextPath);
+const redirectToLogin = () => {
+  const currentPath = getCurrentAppPath();
+  if (currentPath.startsWith('/login')) return;
+
+  const encodedNext = encodeURIComponent(currentPath);
+  const usesHashRouting = String(window.location.hash || '').startsWith('#/');
+  if (usesHashRouting) {
+    window.location.replace(`/#/login?next=${encodedNext}`);
+    return;
+  }
   window.location.replace(`/login?next=${encodedNext}`);
 };
 
@@ -135,6 +149,7 @@ export const clearApiGetCache = () => {
 
 const API = axios.create({
   baseURL: normalizeApiBase(ENV_API_BASE || DEFAULT_API_BASE),
+  timeout: Number.isFinite(API_TIMEOUT_MS) && API_TIMEOUT_MS > 0 ? API_TIMEOUT_MS : 15000,
 });
 
 // Add a request interceptor to include the auth token
