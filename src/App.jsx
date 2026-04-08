@@ -114,11 +114,22 @@ function App() {
         if (activeStorage) {
           activeStorage.setItem('admin', JSON.stringify(profile));
         }
-      } catch {
+      } catch (error) {
         if (!isMounted) return;
-        clearSession();
-        setIsAuthenticated(false);
-        setAdmin({});
+        const status = Number(error?.response?.status || 0);
+        const isAuthFailure = status === 401 || status === 403;
+
+        if (isAuthFailure) {
+          clearSession();
+          setIsAuthenticated(false);
+          setAdmin({});
+          return;
+        }
+
+        // Keep existing local session on transient network/cold-start failures.
+        // Backend-protected calls will still enforce authorization when reachable.
+        setAdmin(parseStoredAdmin());
+        setIsAuthenticated(true);
       } finally {
         if (isMounted) setAuthChecking(false);
       }

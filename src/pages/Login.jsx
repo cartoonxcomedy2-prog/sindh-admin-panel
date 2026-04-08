@@ -26,7 +26,7 @@ export default function LoginPage({ setAuth, setAdmin }) {
       return 'Too many login attempts. Please try again in a few minutes.';
     }
     if (!status) {
-      return 'Unable to reach server. Please check your internet connection.';
+      return 'Server is waking up or network is slow. Please wait 30-60 seconds and try again.';
     }
 
     // Avoid exposing raw backend/internal errors in authentication UI.
