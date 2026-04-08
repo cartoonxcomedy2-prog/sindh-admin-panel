@@ -2,6 +2,7 @@ import axios from 'axios';
 
 const ENV_API_BASE = import.meta.env.VITE_API_BASE_URL;
 const DEFAULT_API_BASE = 'https://azlantraders.store/api';
+const LEGACY_RENDER_API_HOST = 'sindh-backend-api.onrender.com';
 const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 45000);
 const API_RETRY_DELAY_MS = Number(import.meta.env.VITE_API_RETRY_DELAY_MS || 1500);
 const API_MAX_TIMEOUT_RETRIES = Number(import.meta.env.VITE_API_MAX_TIMEOUT_RETRIES || 1);
@@ -18,6 +19,17 @@ const normalizeApiBase = (value) => {
   const raw = String(value || '').trim();
   if (!raw) return DEFAULT_API_BASE;
   return raw.replace(/\/+$/, '');
+};
+
+const resolveApiBase = () => {
+  const envBase = normalizeApiBase(ENV_API_BASE || '');
+  if (
+    envBase &&
+    String(envBase).toLowerCase().includes(LEGACY_RENDER_API_HOST)
+  ) {
+    return DEFAULT_API_BASE;
+  }
+  return envBase || DEFAULT_API_BASE;
 };
 
 const clearStorageSession = (storage) => {
@@ -157,7 +169,7 @@ export const clearApiGetCache = () => {
 };
 
 const API = axios.create({
-  baseURL: normalizeApiBase(ENV_API_BASE || DEFAULT_API_BASE),
+  baseURL: resolveApiBase(),
   timeout: Number.isFinite(API_TIMEOUT_MS) && API_TIMEOUT_MS > 0 ? API_TIMEOUT_MS : 15000,
 });
 
