@@ -82,6 +82,32 @@ const triggerBlobDownload = (blobData, downloadName) => {
   window.URL.revokeObjectURL(blobUrl);
 };
 
+const parseDownloadError = async (err, fallback = 'Failed to download document') => {
+  const directMessage = err?.response?.data?.message;
+  if (typeof directMessage === 'string' && directMessage.trim()) {
+    return directMessage.trim();
+  }
+
+  const blob = err?.response?.data;
+  if (blob instanceof Blob) {
+    try {
+      const text = (await blob.text()).trim();
+      if (!text) return fallback;
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed?.message) return String(parsed.message);
+      } catch {
+        // ignore json parse errors
+      }
+      return text.slice(0, 180);
+    } catch {
+      return fallback;
+    }
+  }
+
+  return err?.message || fallback;
+};
+
 const normalizeId = (value) => {
   if (!value) return '';
   if (typeof value === 'string') return value;
@@ -405,7 +431,8 @@ export default function AdminApplications() {
       triggerBlobDownload(response.data, preferredName);
     } catch (err) {
       console.error('Application document download failed:', err);
-      alert('Failed to download document');
+      const message = await parseDownloadError(err);
+      alert(message);
     }
   };
 
