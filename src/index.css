@@ -25,6 +25,10 @@ body,
   min-height: 100%;
 }
 
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   padding: 0;
@@ -68,6 +72,18 @@ a {
   border-radius: 16px;
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
   overflow: hidden;
+}
+
+.table-card table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.table-card th,
+.table-card td {
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .table-header {
@@ -322,7 +338,9 @@ a {
 .modal-content {
   width: min(740px, 100%);
   max-height: calc(100vh - 32px);
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -340,6 +358,8 @@ a {
 
 .modal-body {
   padding: 18px;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
 }
 
 .modal-footer {

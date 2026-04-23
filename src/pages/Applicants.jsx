@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import API from '../api';
+import API, { resolveAssetUrl } from '../api';
 import imageCompression from 'browser-image-compression';
 import { getStates, getCities } from '../data/locations';
 
@@ -15,11 +15,29 @@ const extractEmbeddedUrl = (value) => {
   return matched[0].replace(/[\],);.]+$/g, '');
 };
 
+const NULLISH_FILE_VALUES = new Set([
+  'null',
+  'undefined',
+  'n/a',
+  'na',
+  'none',
+  '-',
+]);
+
+const normalizeFileValue = (value) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (NULLISH_FILE_VALUES.has(raw.toLowerCase())) return '';
+  return raw;
+};
+
+const hasFileValue = (value) => Boolean(normalizeFileValue(value));
+
 const getFileUrl = (fileName) => {
-  if (!fileName) return '';
-  const raw = fileName.toString().trim();
+  const raw = normalizeFileValue(fileName);
+  if (!raw) return '';
   const embedded = extractEmbeddedUrl(raw);
-  const sourceUrl = embedded || `${API.defaults.baseURL.replace('/api', '')}/uploads/${fileName}`;
+  const sourceUrl = embedded || resolveAssetUrl(raw);
 
   try {
     const parsed = new URL(sourceUrl);
@@ -107,6 +125,67 @@ const inferFileExtension = (value, fallback = '.pdf') => {
   return ext;
 };
 
+const detectBlobFileExtension = async (blob, fallback = '.pdf') => {
+  if (!(blob instanceof Blob)) return fallback;
+
+  try {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    if (
+      bytes.length >= 4 &&
+      bytes[0] === 0x25 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x44 &&
+      bytes[3] === 0x46
+    ) {
+      return '.pdf';
+    }
+
+    if (
+      bytes.length >= 8 &&
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47 &&
+      bytes[4] === 0x0d &&
+      bytes[5] === 0x0a &&
+      bytes[6] === 0x1a &&
+      bytes[7] === 0x0a
+    ) {
+      return '.png';
+    }
+
+    if (
+      bytes.length >= 3 &&
+      bytes[0] === 0xff &&
+      bytes[1] === 0xd8 &&
+      bytes[2] === 0xff
+    ) {
+      return '.jpg';
+    }
+
+    if (bytes.length >= 6) {
+      const head = String.fromCharCode(...bytes.slice(0, 6)).toUpperCase();
+      if (head === 'GIF87A' || head === 'GIF89A') return '.gif';
+    }
+
+    if (bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b) {
+      return '.zip';
+    }
+  } catch {
+    return fallback;
+  }
+
+  return fallback;
+};
+
+const replaceFileExtension = (fileName, extension) => {
+  const safeName = String(fileName || '').trim();
+  const safeExt = extension.startsWith('.') ? extension : `.${extension}`;
+  if (!safeName) return `document${safeExt}`;
+  const base = safeName.replace(/\.[^.\\/]+$/, '');
+  return `${base}${safeExt}`;
+};
+
 const triggerBlobDownload = (blobData, downloadName) => {
   const blobUrl = window.URL.createObjectURL(new Blob([blobData]));
   const link = document.createElement('a');
@@ -124,7 +203,11 @@ const downloadFromDirectUrl = async (url, downloadName) => {
     throw new Error('File does not exist on server');
   }
   const blob = await response.blob();
-  triggerBlobDownload(blob, downloadName);
+  const finalName = replaceFileExtension(
+    downloadName,
+    await detectBlobFileExtension(blob, inferFileExtension(downloadName, '.pdf'))
+  );
+  triggerBlobDownload(blob, finalName);
 };
 
 const parseDownloadError = async (err, fallback = 'Failed to download document') => {
@@ -168,6 +251,7 @@ export default function Applicants() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [targetName, setTargetName] = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [filterState, setFilterState] = useState('');
@@ -194,6 +278,77 @@ export default function Applicants() {
   const [studentData, setStudentData] = useState(null);
   const [activeTab, setActiveTab] = useState('account');
   const [currentAppForModal, setCurrentAppForModal] = useState(null);
+  const [showDocModal, setShowDocModal] = useState(false);
+  const [docApp, setDocApp] = useState(null);
+
+  const getFileDisplayName = useCallback((value) => {
+    const raw = normalizeFileValue(value);
+    if (!raw) return 'Not uploaded';
+    const embedded = extractEmbeddedUrl(raw);
+    const source = (embedded || raw).split('?')[0].split('#')[0];
+    const parts = source.split(/[\\/]/).filter(Boolean);
+    const last = parts[parts.length - 1] || source;
+    try {
+      return decodeURIComponent(last);
+    } catch {
+      return last;
+    }
+  }, []);
+
+  const syncApplicationRecord = useCallback((updated) => {
+    if (!updated?._id) return;
+    setData((prev) => prev.map((a) => (a._id === updated._id ? updated : a)));
+    setSelectedApp((prev) => (prev?._id === updated._id ? updated : prev));
+    setCurrentAppForModal((prev) =>
+      prev?._id === updated._id ? updated : prev
+    );
+    setDocApp((prev) => (prev?._id === updated._id ? updated : prev));
+  }, []);
+
+  const openDocsModal = useCallback((app) => {
+    if (!app?._id) return;
+    setDocApp(app);
+    setShowDocModal(true);
+  }, []);
+
+  const closeDocsModal = useCallback(() => {
+    setShowDocModal(false);
+    setDocApp(null);
+  }, []);
+
+  const openStudentModal = useCallback(async (app) => {
+    if (!app) return;
+    setStudentData({ ...(app.user || {}), country: ADMIN_COUNTRY });
+    setCurrentAppForModal(app);
+    setShowStudentModal(true);
+    setActiveTab('account');
+
+    try {
+      const userId = app?.user?._id;
+      if (!userId) return;
+      const res = await API.get(`/users/${userId}`);
+      setStudentData({ ...(res.data?.data || {}), country: ADMIN_COUNTRY });
+    } catch (err) {
+      console.error('Student profile fetch failed:', err);
+    }
+  }, []);
+
+  const handleDownloadBundleForApplication = useCallback(async (application) => {
+    const target = application || currentAppForModal || docApp;
+    if (!target?._id) return;
+    try {
+      const userName = target?.user?.name || studentData?.name || 'applicant';
+      const preferredName = `${sanitizeFileNamePart(userName, 'applicant')}-${sanitizeFileNamePart(target._id, 'application')}-bundle.zip`;
+      const res = await API.get(`/applications/${target._id}/download-bundle`, {
+        params: { downloadName: preferredName },
+        responseType: 'blob',
+      });
+      triggerBlobDownload(res.data, preferredName);
+    } catch (err) {
+      console.error('Bundle download failed:', err);
+      alert('Download failed');
+    }
+  }, [currentAppForModal, docApp, studentData?.name]);
 
   const fetchApplicants = useCallback(async () => {
     setLoading(true);
@@ -207,6 +362,7 @@ export default function Applicants() {
           state: filterState || undefined,
           city: filterCity || undefined,
           program: programFilter || undefined,
+          includeEligible: false,
           startDate: startDate || undefined,
           endDate: endDate || undefined,
         },
@@ -253,6 +409,14 @@ export default function Applicants() {
   }, [fetchApplicants]);
 
   useEffect(() => {
+    const timer = setTimeout(() => {
+      const normalized = searchInput.trim();
+      setSearchTerm((prev) => (prev === normalized ? prev : normalized));
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  useEffect(() => {
     const fetchTarget = async () => {
       try {
         const targetRes = await API.get(`/${type === 'university' ? 'universities' : 'scholarships'}/${id}`);
@@ -290,6 +454,7 @@ export default function Applicants() {
       setData(prev => prev.map(a => a._id === appId ? { ...a, status: newStatus } : a));
       if (selectedApp?._id === appId) setSelectedApp(prev => ({ ...prev, status: newStatus }));
       if (currentAppForModal?._id === appId) setCurrentAppForModal(prev => ({ ...prev, status: newStatus }));
+      if (docApp?._id === appId) setDocApp(prev => ({ ...prev, status: newStatus }));
     } catch {
       alert('Failed to update status');
     }
@@ -330,14 +495,12 @@ export default function Applicants() {
           const res = await API.put(`/applications/${appId}/university-status`, formData, {
             headers: { 'Content-Type': 'multipart/form-data' }
           });
-          setSelectedApp(res.data.data);
-          setData(prev => prev.map(a => a._id === appId ? res.data.data : a));
+          syncApplicationRecord(res.data.data);
         } else {
           const res = await API.put(`/applications/${appId}`, formData, {
             headers: { 'Content-Type': 'multipart/form-data' }
           });
-          setSelectedApp(res.data.data);
-          setData(prev => prev.map(a => (a._id === appId || a._id === res.data.data?._id) ? res.data.data : a));
+          syncApplicationRecord(res.data.data);
         }
         alert(`${field === 'admitCard' ? 'Admit Card' : 'Offer Letter'} uploaded!`);
       } catch (err) {
@@ -353,6 +516,16 @@ export default function Applicants() {
     try {
       await API.delete(`/applications/${appId}`);
       setData(prev => prev.filter(a => a._id !== appId));
+      if (selectedApp?._id === appId) {
+        setSelectedApp(null);
+        setShowModal(false);
+      }
+      if (currentAppForModal?._id === appId) {
+        setCurrentAppForModal(null);
+      }
+      if (docApp?._id === appId) {
+        closeDocsModal();
+      }
       alert('Application deleted');
     } catch {
       alert('Failed to delete application');
@@ -374,8 +547,7 @@ export default function Applicants() {
       const payload = {};
       payload[field] = value || null;
       const res = await API.put(`/applications/${appId}`, payload);
-      setSelectedApp(res.data.data);
-      setData(prev => prev.map(a => a._id === appId ? res.data.data : a));
+      syncApplicationRecord(res.data.data);
     } catch (err) {
       alert('Failed to update date: ' + err.message);
     }
@@ -387,8 +559,7 @@ export default function Applicants() {
       const payload = {};
       payload[field] = null;
       const res = await API.put(`/applications/${appId}`, payload);
-      setSelectedApp(res.data.data);
-      setData(prev => prev.map(a => a._id === appId ? res.data.data : a));
+      syncApplicationRecord(res.data.data);
       alert('Document deleted');
     } catch {
       alert('Delete failed');
@@ -454,22 +625,18 @@ export default function Applicants() {
   };
 
   const buildApplicationDocDownloadName = ({
-    appId,
     field,
     sourceFile,
-    universityName = '',
   }) => {
     const userName =
       studentData?.name ||
       currentAppForModal?.user?.name ||
       selectedApp?.user?.name ||
       'applicant';
-    const docLabel = field === 'admitCard' ? 'admit-card' : 'offer-letter';
+    const docLabel = field === 'admitCard' ? 'AdmitCard' : 'OfferLetter';
     const ext = inferFileExtension(sourceFile, '.pdf');
     const parts = [
       sanitizeFileNamePart(userName, 'applicant'),
-      sanitizeFileNamePart(appId, 'application'),
-      sanitizeFileNamePart(universityName, ''),
       docLabel,
     ].filter(Boolean);
     return `${parts.join('-') || 'document'}${ext}`;
@@ -484,10 +651,8 @@ export default function Applicants() {
   }) => {
     try {
       const preferredName = buildApplicationDocDownloadName({
-        appId,
         field,
         sourceFile,
-        universityName,
       });
       const res = await API.get(`/applications/${appId}/download-doc/${field}`, {
         params: {
@@ -496,7 +661,14 @@ export default function Applicants() {
         },
         responseType: 'blob',
       });
-      triggerBlobDownload(res.data, preferredName);
+      const finalName = replaceFileExtension(
+        preferredName,
+        await detectBlobFileExtension(
+          res.data,
+          inferFileExtension(sourceFile, inferFileExtension(preferredName, '.pdf'))
+        )
+      );
+      triggerBlobDownload(res.data, finalName);
     } catch (err) {
       console.error('Application doc download failed:', err);
       const message = await parseDownloadError(err);
@@ -534,7 +706,11 @@ export default function Applicants() {
           responseType: 'blob',
         }
       );
-      triggerBlobDownload(response.data, safeName);
+      const finalName = replaceFileExtension(
+        safeName,
+        await detectBlobFileExtension(response.data, fallbackExt)
+      );
+      triggerBlobDownload(response.data, finalName);
     } catch (err) {
       console.error('Education download failed:', err);
       alert('Failed to download document');
@@ -546,8 +722,7 @@ export default function Applicants() {
     try {
       const payload = { universityId: uniId, [field]: null };
       const res = await API.put(`/applications/${appId}/university-status`, payload);
-      setSelectedApp(res.data.data);
-      setData(prev => prev.map(a => a._id === appId ? res.data.data : a));
+      syncApplicationRecord(res.data.data);
     } catch (err) {
       console.error('Offered university doc delete failed:', err);
       alert('Failed to delete university document');
@@ -555,18 +730,7 @@ export default function Applicants() {
   };
 
   const handleDownloadFullBundle = async () => {
-    if (!currentAppForModal?._id) return;
-    try {
-      const preferredName = `${sanitizeFileNamePart(studentData?.name || 'applicant', 'applicant')}-${sanitizeFileNamePart(currentAppForModal._id, 'application')}-bundle.zip`;
-      const res = await API.get(`/applications/${currentAppForModal._id}/download-bundle`, {
-        params: { downloadName: preferredName },
-        responseType: 'blob',
-      });
-      triggerBlobDownload(res.data, preferredName);
-    } catch (err) {
-      console.error('Bundle download failed:', err);
-      alert('Download failed');
-    }
+    await handleDownloadBundleForApplication(currentAppForModal);
   };
 
   const handleUniStatusChange = async (appId, uniId, newStatus) => {
@@ -575,8 +739,7 @@ export default function Applicants() {
         universityId: uniId, 
         status: newStatus 
       });
-      setSelectedApp(res.data.data);
-      setData(prev => prev.map(a => a._id === appId ? res.data.data : a));
+      syncApplicationRecord(res.data.data);
     } catch {
       alert('Failed to update status');
     }
@@ -600,8 +763,7 @@ export default function Applicants() {
 
     try {
       const res = await API.put(`/applications/${appId}`, { offeredUniversities: newList });
-      setSelectedApp(res.data.data);
-      setData(prev => prev.map(a => a._id === appId ? res.data.data : a));
+      syncApplicationRecord(res.data.data);
     } catch {
       alert('Failed to update universities');
     }
@@ -742,7 +904,6 @@ export default function Applicants() {
 
   const renderEducationSection = (title, section, fields) => {
     const eduData = studentData?.education?.[section] || {};
-    const personalInfo = getPersonalInfo(studentData);
     return (
       <div key={section} className="edu-mgmt-section" style={{ 
         marginBottom: 30, 
@@ -761,53 +922,53 @@ export default function Applicants() {
               {section === 'nationalId' ? 'Identity & Profile' : title}
             </h4>
           </div>
-          {eduData.enabled && <span className="badge badge-active" style={{ fontSize: 11, padding: '4px 12px', borderRadius: 8, background: '#dcfce7', color: '#166534' }}>Verified Section</span>}
+          <button 
+            className="btn-action primary"
+            onClick={handleStudentUpdate}
+            style={{ padding: '8px 20px', borderRadius: '10px', fontSize: '13px', fontWeight: 700 }}
+          >
+            Save Section
+          </button>
         </div>
 
-        {/* Text Details first */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 15, marginBottom: 20 }}>
           {section === 'nationalId' && (
             <>
               <div className="info-field">
                 <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Country Lived</label>
-                <div style={{ fontWeight: 600 }}>{studentData.country || ADMIN_COUNTRY}</div>
+                <input 
+                  type="text" 
+                  value={studentData.country || ''} 
+                  onChange={(e) => setStudentData(prev => ({ ...prev, country: e.target.value }))}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px' }}
+                />
               </div>
               <div className="info-field">
                 <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>State Lived</label>
-                <div style={{ fontWeight: 600 }}>{studentData.state || 'Not provided'}</div>
+                <input 
+                  type="text" 
+                  value={studentData.state || ''} 
+                  onChange={(e) => setStudentData(prev => ({ ...prev, state: e.target.value }))}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px' }}
+                />
               </div>
               <div className="info-field">
                 <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>City Lived</label>
-                <div style={{ fontWeight: 600 }}>{studentData.city || 'Not provided'}</div>
+                <input 
+                  type="text" 
+                  value={studentData.city || ''} 
+                  onChange={(e) => setStudentData(prev => ({ ...prev, city: e.target.value }))}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px' }}
+                />
               </div>
               <div className="info-field">
                 <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Home Address</label>
-                <div style={{ fontWeight: 600 }}>{studentData.address || 'Not provided'}</div>
-              </div>
-              <div style={{ gridColumn: '1 / -1' }}><hr style={{ opacity: 0.1, margin: '10px 0' }} /></div>
-              <div className="info-field">
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>National ID Issuing Country</label>
-                <div style={{ fontWeight: 600 }}>{eduData.country || 'Not provided'}</div>
-              </div>
-              <div className="info-field">
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>NIC / ID Number</label>
-                <div style={{ fontWeight: 600 }}>{personalInfo.cnicNumber || eduData.idNumber || 'Not provided'}</div>
-              </div>
-              <div className="info-field">
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Father Name</label>
-                <div style={{ fontWeight: 600 }}>{personalInfo.fatherName || studentData.fatherName || 'Not provided'}</div>
-              </div>
-              <div className="info-field">
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Father Contact Number</label>
-                <div style={{ fontWeight: 600 }}>{personalInfo.fatherContactNumber || 'Not provided'}</div>
-              </div>
-              <div className="info-field">
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Father CNIC Number</label>
-                <div style={{ fontWeight: 600 }}>{personalInfo.fatherCnicNumber || 'Not provided'}</div>
-              </div>
-              <div className="info-field">
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Date of Birth</label>
-                <div style={{ fontWeight: 600 }}>{personalInfo.dateOfBirth || studentData.dateOfBirth || 'Not provided'}</div>
+                <input 
+                  type="text" 
+                  value={studentData.address || ''} 
+                  onChange={(e) => setStudentData(prev => ({ ...prev, address: e.target.value }))}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px' }}
+                />
               </div>
             </>
           )}
@@ -818,15 +979,67 @@ export default function Applicants() {
                 <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
                   {section === 'matric' || section === 'intermediate' ? 'School/College' : 'Degree Name'}
                 </label>
-                <div style={{ fontWeight: 600 }}>{eduData.schoolName || eduData.collegeName || eduData.degreeName || 'N/A'}</div>
+                <input 
+                  type="text" 
+                  value={eduData.schoolName || eduData.collegeName || eduData.degreeName || ''} 
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    const field = section === 'matric' || section === 'intermediate' ? (section === 'matric' ? 'schoolName' : 'collegeName') : 'degreeName';
+                    setStudentData(prev => ({
+                      ...prev,
+                      education: {
+                        ...prev.education,
+                        [section]: {
+                          ...prev.education[section],
+                          [field]: val
+                        }
+                      }
+                    }));
+                  }}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px' }}
+                />
               </div>
               <div className="info-field">
                 <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Passing Year</label>
-                <div style={{ fontWeight: 600 }}>{eduData.passingYear || 'N/A'}</div>
+                <input 
+                  type="text" 
+                  value={eduData.passingYear || ''} 
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setStudentData(prev => ({
+                      ...prev,
+                      education: {
+                        ...prev.education,
+                        [section]: {
+                          ...prev.education[section],
+                          passingYear: val
+                        }
+                      }
+                    }));
+                  }}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px' }}
+                />
               </div>
               <div className="info-field">
                 <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Grade / CGPA</label>
-                <div style={{ fontWeight: 600, color: 'var(--success)' }}>{eduData.grade || 'N/A'}</div>
+                <input 
+                  type="text" 
+                  value={eduData.grade || ''} 
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setStudentData(prev => ({
+                      ...prev,
+                      education: {
+                        ...prev.education,
+                        [section]: {
+                          ...prev.education[section],
+                          grade: val
+                        }
+                      }
+                    }));
+                  }}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px', color: 'var(--success)', fontWeight: 600 }}
+                />
               </div>
             </>
           )}
@@ -835,11 +1048,67 @@ export default function Applicants() {
             <>
               <div className="info-field">
                 <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Passport Number</label>
-                <div style={{ fontWeight: 600 }}>{eduData.passportNumber || 'N/A'}</div>
+                <input 
+                  type="text" 
+                  value={eduData.passportNumber || ''} 
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setStudentData(prev => ({
+                      ...prev,
+                      education: {
+                        ...prev.education,
+                        international: {
+                          ...prev.education.international,
+                          passportNumber: val
+                        }
+                      }
+                    }));
+                  }}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px' }}
+                />
               </div>
               <div className="info-field">
                 <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>English Test</label>
-                <div style={{ fontWeight: 600 }}>{eduData.englishTestType || 'N/A'} (Score: {eduData.testScore || '0'})</div>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <input 
+                    type="text" 
+                    value={eduData.englishTestType || ''} 
+                    placeholder="Type"
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setStudentData(prev => ({
+                        ...prev,
+                        education: {
+                          ...prev.education,
+                          international: {
+                            ...prev.education.international,
+                            englishTestType: val
+                          }
+                        }
+                      }));
+                    }}
+                    style={{ flex: 2, padding: '8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px' }}
+                  />
+                  <input 
+                    type="text" 
+                    value={eduData.testScore || ''} 
+                    placeholder="Score"
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setStudentData(prev => ({
+                        ...prev,
+                        education: {
+                          ...prev.education,
+                          international: {
+                            ...prev.education.international,
+                            testScore: val
+                          }
+                        }
+                      }));
+                    }}
+                    style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px' }}
+                  />
+                </div>
               </div>
             </>
           )}
@@ -847,7 +1116,12 @@ export default function Applicants() {
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 20 }}>
           {fields.map(f => {
-            const fileName = f.isPersonalInfo ? (studentData?.education?.personalInfo?.[f.key]) : eduData[f.key];
+            const fileName = normalizeFileValue(
+              f.isPersonalInfo
+                ? (studentData?.education?.personalInfo?.[f.key])
+                : eduData[f.key]
+            );
+            const hasFile = hasFileValue(fileName);
             const displayLabel = `${studentData?.name}_${title}_${f.label}`.replace(/\s+/g, '_');
             const displayNameWithExt = `${displayLabel}${inferFileExtension(fileName, '.pdf')}`;
             return (
@@ -859,9 +1133,14 @@ export default function Applicants() {
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 15 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ fontSize: 24 }}>{fileName ? '📄' : '⭕'}</div>
+                    <div style={{ fontSize: 24 }}>{hasFile ? '📄' : '⭕'}</div>
                     <div>
                         <div style={{ fontSize: 13, fontWeight: 800, color: '#1e293b' }}>{f.label}</div>
+                        {hasFile && (
+                          <div style={{ fontSize: 10, color: '#2e8b57', fontWeight: 600, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {fileName.split('/').pop()}
+                          </div>
+                        )}
                         <div style={{ fontSize: 10, color: '#64748b', fontWeight: 600 }}>{section.toUpperCase()}</div>
                     </div>
                   </div>
@@ -870,14 +1149,14 @@ export default function Applicants() {
                     padding: '4px 8px', 
                     borderRadius: 6, 
                     fontWeight: 700,
-                    background: fileName ? '#dcfce7' : '#fee2e2',
-                    color: fileName ? '#166534' : '#991b1b'
+                    background: hasFile ? '#dcfce7' : '#fee2e2',
+                    color: hasFile ? '#166534' : '#991b1b'
                   }}>
-                    {fileName ? 'UPLOADED' : 'MISSING'}
+                    {hasFile ? 'UPLOADED' : 'MISSING'}
                   </span>
                 </div>
 
-                {fileName ? (
+                {hasFile ? (
                   <>
                     <div style={{ 
                       fontSize: 11, 
@@ -943,20 +1222,8 @@ export default function Applicants() {
                 ) : (
                   <button 
                     onClick={() => handleDocUpload(section, f.key)}
-                    style={{ 
-                      width: '100%', 
-                      padding: '10px', 
-                      background: 'white', 
-                      border: '2px dashed #cbd5e1', 
-                      borderRadius: '12px',
-                      color: '#64748b',
-                      fontSize: 12,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      transition: 'all 0.2s'
-                    }}
-                    onMouseOver={(e) => { e.target.style.borderColor = 'var(--primary)'; e.target.style.color = 'var(--primary)'; }}
-                    onMouseOut={(e) => { e.target.style.borderColor = '#cbd5e1'; e.target.style.color = '#64748b'; }}
+                    className="btn-action primary"
+                    style={{ width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700 }}
                   >
                     + Upload {f.label}
                   </button>
@@ -1019,8 +1286,8 @@ export default function Applicants() {
                 <input 
                     type="text" 
                     placeholder="Search name or email..." 
-                    value={searchTerm}
-                    onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
                     style={{ width: '100%', padding: '12px 12px 12px 40px', borderRadius: '10px', border: '1px solid var(--border)', color: 'var(--text-primary)', fontSize: '14px', outline: 'none' }}
                 />
             </div>
@@ -1159,7 +1426,7 @@ export default function Applicants() {
                   <th style={{ padding: '10px 12px' }}>State</th>
                   <th style={{ padding: '10px 12px' }}>City</th>
                   <th style={{ padding: '10px 12px', minWidth: '200px' }}>Programs / Level</th>
-                  <th style={{ padding: '10px 12px' }}>Status</th>
+                  <th style={{ padding: '10px 12px', minWidth: '130px' }}>Docs</th>
                   <th style={{ padding: '10px 12px' }}>Applied On</th>
                   <th style={{ textAlign: 'center', padding: '10px 12px' }}>Actions</th>
                 </tr>
@@ -1208,7 +1475,8 @@ export default function Applicants() {
                                 border: 'none', 
                                 color: 'var(--primary)',
                                 fontWeight: 600,
-                                whiteSpace: 'nowrap'
+                                whiteSpace: 'normal',
+                                overflowWrap: 'anywhere'
                               }}>
                                 {idx > 0 ? ', ' : ''}{p.programName}
                               </span>
@@ -1217,29 +1485,30 @@ export default function Applicants() {
                         </div>
                       </td>
                       <td style={{ padding: '10px 12px' }}>
-                        <select 
-                          value={app.status} 
-                          onChange={(e) => handleStatusChange(app._id, e.target.value)}
-                          style={{ 
-                            padding: '6px 10px', 
-                            borderRadius: 8, 
-                            background: app.status === 'Selected' ? '#dcfce7' : 
-                                       app.status === 'Rejected' ? '#fee2e2' : 
-                                       app.status === 'Interview' ? '#e0e7ff' :
-                                       app.status === 'Test' ? '#fef3c7' : '#f1f5f9',
-                            color: app.status === 'Selected' ? '#166534' : 
-                                   app.status === 'Rejected' ? '#991b1b' : 
-                                   app.status === 'Interview' ? '#3730a3' :
-                                   app.status === 'Test' ? '#92400e' : '#475569',
-                            fontSize: '11px',
-                            fontWeight: 800,
-                            cursor: 'pointer',
-                            outline: 'none',
-                            transition: 'all 0.2s'
+                        <button
+                          onClick={() => {
+                            if (app.scholarship) {
+                              setSelectedApp(app);
+                              setShowModal(true);
+                              return;
+                            }
+                            openDocsModal(app);
                           }}
+                          style={{
+                            background: '#0F766E',
+                            border: 'none',
+                            color: 'white',
+                            fontSize: '11px',
+                            padding: '6px 10px',
+                            borderRadius: '6px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            width: '100%'
+                          }}
+                          title={app.scholarship ? 'Manage scholarship docs/status' : 'Admission documents'}
                         >
-                          {ALL_STATUSES.map(s => <option key={s} value={s} style={{ background: '#fff', color: '#000' }}>{s}</option>)}
-                        </select>
+                          DOCS
+                        </button>
                       </td>
                       <td style={{ fontSize: 11, color: '#000000', padding: '10px 12px', fontWeight: '500' }}>
                         {new Date(app.appliedAt).toLocaleDateString()}
@@ -1247,12 +1516,7 @@ export default function Applicants() {
                       <td style={{ padding: '10px 12px' }}>
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
                           <button 
-                            onClick={() => { 
-                              setStudentData({ ...(app.user || {}), country: ADMIN_COUNTRY }); 
-                              setCurrentAppForModal(app);
-                              setShowStudentModal(true); 
-                              setActiveTab('account'); 
-                            }}
+                            onClick={() => openStudentModal(app)}
                             style={{ 
                               background: '#4F46E5', 
                               border: 'none', 
@@ -1268,24 +1532,6 @@ export default function Applicants() {
                             }}
                           >
                             VIEW
-                          </button>
-                          <button 
-                            onClick={() => { setSelectedApp(app); setShowModal(true); }}
-                            style={{ 
-                              background: '#10B981', 
-                              border: 'none', 
-                              color: 'white', 
-                              fontSize: '11px', 
-                              padding: '4px 10px', 
-                              borderRadius: '6px',
-                              fontWeight: '600',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center'
-                            }}
-                          >
-                            STATUS
                           </button>
                           <button 
                             onClick={() => deleteApplication(app._id)}
@@ -1630,6 +1876,25 @@ export default function Applicants() {
                       { key: 'recommendationLetter', label: 'Recommendation Letter' }
                     ])
                   }
+
+                  <div style={{ marginTop: 30, padding: '20px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end' }}>
+                     <button 
+                       onClick={handleStudentUpdate}
+                       style={{ 
+                         padding: '12px 30px', 
+                         background: 'var(--primary)', 
+                         color: 'white', 
+                         borderRadius: '12px', 
+                         border: 'none', 
+                         fontWeight: 800, 
+                         fontSize: '14px', 
+                         cursor: 'pointer',
+                         boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
+                       }}
+                     >
+                       ✅ Save All Education Changes
+                     </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1676,6 +1941,8 @@ export default function Applicants() {
                         normalizeId(u?.university?._id || u?.university) === uniId
                     );
                     const isOffered = !!offeredData;
+                    const hasAdmitCard = hasFileValue(offeredData?.admitCard);
+                    const hasOfferLetter = hasFileValue(offeredData?.offerLetter);
 
                     return (
                       <div key={uniId} className={`uni-manage-item ${isOffered ? 'active' : ''}`} style={{
@@ -1696,10 +1963,10 @@ export default function Applicants() {
                         {isOffered && (
                           <div style={{ marginTop: 10, display: 'flex', gap: 10, paddingLeft: 22 }}>
                              <div className="offered-uni-actions" style={{ flex: 1, display: 'flex', gap: 5 }}>
-                               <button className={`btn-publish small ${offeredData.admitCard ? 'success' : ''}`} onClick={() => handleFileUpload(selectedApp._id, 'admitCard', uniId)}>
-                                 {offeredData.admitCard ? '🔄 Admit' : '+ Admit'}
+                               <button className={`btn-publish small ${hasAdmitCard ? 'success' : ''}`} onClick={() => handleFileUpload(selectedApp._id, 'admitCard', uniId)}>
+                                 {hasAdmitCard ? '🔄 Admit' : '+ Admit'}
                                </button>
-                                {offeredData.admitCard && (
+                                {hasAdmitCard && (
                                   <>
                                     <a href={getFileUrl(offeredData.admitCard)} target="_blank" rel="noreferrer" style={{ padding: '6px 10px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 8, textDecoration: 'none' }}>
                                       View
@@ -1729,10 +1996,10 @@ export default function Applicants() {
                              </div>
                              
                              <div className="offered-uni-actions" style={{ flex: 1, display: 'flex', gap: 5 }}>
-                               <button className={`btn-publish small ${offeredData.offerLetter ? 'success' : ''}`} onClick={() => handleFileUpload(selectedApp._id, 'offerLetter', uniId)}>
-                                 {offeredData.offerLetter ? '🔄 Offer' : '+ Offer'}
+                               <button className={`btn-publish small ${hasOfferLetter ? 'success' : ''}`} onClick={() => handleFileUpload(selectedApp._id, 'offerLetter', uniId)}>
+                                 {hasOfferLetter ? '🔄 Offer' : '+ Offer'}
                                </button>
-                                {offeredData.offerLetter && (
+                                {hasOfferLetter && (
                                   <>
                                     <a href={getFileUrl(offeredData.offerLetter)} target="_blank" rel="noreferrer" style={{ padding: '6px 10px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 8, textDecoration: 'none' }}>
                                       View
@@ -1769,71 +2036,10 @@ export default function Applicants() {
               )}
               
               <div className="direct-docs" style={{ borderTop: '1px solid var(--border)', paddingTop: 15, padding: 20 }}>
-                <h4 style={{ marginBottom: 15 }}>📤 Admission Documents (General)</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 15, marginBottom: 20 }}>
-                  <div className="doc-tile-admin" style={{ padding: 15, borderRadius: 16 }}>
-                    <label style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', marginBottom: 10, display: 'block' }}>Admit Card PDF</label>
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <button
-                        className={`btn-publish ${selectedApp.admitCard ? 'success' : ''}`}
-                        onClick={() => handleFileUpload(selectedApp._id, 'admitCard')}
-                        style={{ flex: 1, padding: '10px', fontSize: 13, borderRadius: 10 }}
-                      >
-                        {selectedApp.admitCard ? 'Replace PDF' : '+ Upload PDF'}
-                      </button>
-                      {selectedApp.admitCard && (
-                        <>
-                          <a href={getFileUrl(selectedApp.admitCard)} target="_blank" rel="noreferrer" style={{ padding: '10px 14px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 10, textDecoration: 'none' }}>View</a>
-                          <button
-                            onClick={() =>
-                              downloadApplicationDoc({
-                                appId: selectedApp._id,
-                                field: 'admitCard',
-                                sourceFile: selectedApp.admitCard,
-                              })
-                            }
-                            style={{ padding: '10px 14px', background: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 10, cursor: 'pointer' }}
-                          >
-                            Download
-                          </button>
-                          <button onClick={() => handleDeleteAppDoc(selectedApp._id, 'admitCard')} style={{ padding: '10px 14px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: 10, cursor: 'pointer' }}>Delete</button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="doc-tile-admin" style={{ padding: 15, borderRadius: 16 }}>
-                    <label style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', marginBottom: 10, display: 'block' }}>Offer Letter PDF</label>
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <button
-                        className={`btn-publish ${selectedApp.offerLetter ? 'success' : ''}`}
-                        onClick={() => handleFileUpload(selectedApp._id, 'offerLetter')}
-                        style={{ flex: 1, padding: '10px', fontSize: 13, borderRadius: 10 }}
-                      >
-                        {selectedApp.offerLetter ? 'Replace PDF' : '+ Upload PDF'}
-                      </button>
-                      {selectedApp.offerLetter && (
-                        <>
-                          <a href={getFileUrl(selectedApp.offerLetter)} target="_blank" rel="noreferrer" style={{ padding: '10px 14px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 10, textDecoration: 'none' }}>View</a>
-                          <button
-                            onClick={() =>
-                              downloadApplicationDoc({
-                                appId: selectedApp._id,
-                                field: 'offerLetter',
-                                sourceFile: selectedApp.offerLetter,
-                              })
-                            }
-                            style={{ padding: '10px 14px', background: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 10, cursor: 'pointer' }}
-                          >
-                            Download
-                          </button>
-                          <button onClick={() => handleDeleteAppDoc(selectedApp._id, 'offerLetter')} style={{ padding: '10px 14px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: 10, cursor: 'pointer' }}>Delete</button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <h4 style={{ marginBottom: 12 }}>📅 Important Dates</h4>
+                <p style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--text-secondary)' }}>
+                  General admit/offer files are now managed from the table <strong>DOCS</strong> button.
+                </p>
+                <h4 style={{ marginBottom: 12 }}>Important Dates</h4>
                 <div style={{ display: 'flex', gap: 15, flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: 1 }}>
                     <label style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Test Date</label>
@@ -1858,6 +2064,154 @@ export default function Applicants() {
             </div>
             <div className="modal-footer" style={{ padding: 20, borderTop: '1px solid var(--border)', textAlign: 'right' }}>
               <button className="btn-publish" onClick={() => setShowModal(false)} style={{ width: '100%' }}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDocModal && docApp && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '760px', width: '92%', overflow: 'hidden' }}>
+            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0 }}>
+                <h3 style={{ margin: 0 }}>Application Documents</h3>
+                <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
+                  {docApp.user?.name || 'Applicant'} - {docApp.university?.name || docApp.scholarship?.title || 'Application'}
+                </p>
+              </div>
+              <button className="btn-close" onClick={closeDocsModal}>✕</button>
+            </div>
+
+            <div className="modal-body" style={{ display: 'grid', gap: 12 }}>
+              <div
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 12,
+                  padding: 12,
+                  background: '#fff',
+                  display: 'grid',
+                  gap: 8,
+                }}
+              >
+                <strong style={{ fontSize: 13 }}>Application Status</strong>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <select
+                    value={docApp.status || 'Applied'}
+                    onChange={(e) => handleStatusChange(docApp._id, e.target.value)}
+                    style={{
+                      minWidth: 170,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: '1px solid var(--border)',
+                      background: '#fff',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: '#0f172a',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {ALL_STATUSES.map((statusOption) => (
+                      <option key={statusOption} value={statusOption}>
+                        {statusOption}
+                      </option>
+                    ))}
+                  </select>
+                  <span style={{ fontSize: 11, color: '#64748b' }}>
+                    Update applicant stage from here.
+                  </span>
+                </div>
+              </div>
+
+              {[
+                { field: 'admitCard', title: 'Admit Card' },
+                { field: 'offerLetter', title: 'Offer Letter' },
+              ].map((doc) => {
+                const fileValue = normalizeFileValue(docApp?.[doc.field]);
+                const hasFile = hasFileValue(fileValue);
+                const displayName = getFileDisplayName(fileValue);
+                return (
+                  <div
+                    key={doc.field}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 12,
+                      padding: 12,
+                      background: '#fff',
+                      display: 'grid',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <strong style={{ fontSize: 13 }}>{doc.title}</strong>
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '3px 8px',
+                          borderRadius: 999,
+                          color: hasFile ? '#166534' : '#92400e',
+                          background: hasFile ? '#dcfce7' : '#fef3c7',
+                        }}
+                      >
+                        {hasFile ? 'Uploaded' : 'Missing'}
+                      </span>
+                    </div>
+
+                    <div style={{ fontSize: 12, color: '#475569', overflowWrap: 'anywhere' }}>
+                      {displayName}
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        className="btn-action-primary"
+                        onClick={() => handleFileUpload(docApp._id, doc.field)}
+                      >
+                        {hasFile ? 'Change' : 'Upload'}
+                      </button>
+                      {hasFile && (
+                        <a
+                          href={getFileUrl(fileValue)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn-action"
+                          style={{ textDecoration: 'none' }}
+                        >
+                          View
+                        </a>
+                      )}
+                      {hasFile && (
+                        <button
+                          className="btn-action"
+                          onClick={() =>
+                            downloadApplicationDoc({
+                              appId: docApp._id,
+                              field: doc.field,
+                              sourceFile: fileValue,
+                            })
+                          }
+                        >
+                          Download
+                        </button>
+                      )}
+                      {hasFile && (
+                        <button
+                          className="btn-action"
+                          style={{ borderColor: '#fecaca', color: '#b91c1c', background: '#fff1f2' }}
+                          onClick={() => handleDeleteAppDoc(docApp._id, doc.field)}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', paddingTop: 4 }}>
+                <button className="btn-action" onClick={() => handleDownloadBundleForApplication(docApp)}>
+                  Download ZIP
+                </button>
+              </div>
             </div>
           </div>
         </div>

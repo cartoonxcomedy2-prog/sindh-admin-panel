@@ -200,6 +200,23 @@ export default function CreateScholarship() {
   const [selectedSteps, setSelectedSteps] = useState(['Applied']);
 
   useEffect(() => {
+    const fetchUniversitiesForLinking = async () => {
+      try {
+        const res = await API.get('/universities/admin/list');
+        setAllUniversities(res.data?.data || []);
+      } catch (adminListErr) {
+        // Scholarship-role users cannot access /admin/list of universities.
+        // Fall back to public universities so linked selection remains usable.
+        try {
+          const res = await API.get('/universities');
+          setAllUniversities(Array.isArray(res.data) ? res.data : []);
+        } catch (fallbackErr) {
+          console.error('Univ fetch error:', fallbackErr || adminListErr);
+          setAllUniversities([]);
+        }
+      }
+    };
+
     if (isEdit) {
       setIsBootstrapping(true);
       API.get(`/scholarships/${id}`)
@@ -231,7 +248,7 @@ export default function CreateScholarship() {
           setProvider(s.provider || '');
           setWebsite(s.website || '');
           setAddress(s.address || '');
-          setThumbnailPreview(s.thumbnail || '');
+          setThumbnailPreview(s.thumbnail || s.image || '');
           setSelectedSteps(s.applicationSteps || ['Applied']);
           
           const normalizedPrograms = Array.isArray(s.programs)
@@ -249,11 +266,7 @@ export default function CreateScholarship() {
           alert('Failed to fetch scholarship data');
         })
         .finally(() => setIsBootstrapping(false));
-
-      // Fetch all universities for selection
-      API.get('/universities/admin/list')
-        .then(res => setAllUniversities(res.data.data || []))
-        .catch(err => console.error('Univ fetch error:', err));
+      fetchUniversitiesForLinking();
     } else {
       setTitle('');
       setDescription('');
@@ -280,11 +293,7 @@ export default function CreateScholarship() {
       setMasterPrograms([emptyProgram('Master')]);
       setLinkedUniversities([]);
       setSelectedSteps(['Applied']);
-
-      // Fetch all universities for selection
-      API.get('/universities/admin/list')
-        .then(res => setAllUniversities(res.data.data || []))
-        .catch(err => console.error('Univ fetch error:', err));
+      fetchUniversitiesForLinking();
     }
   }, [id, isEdit]);
 
@@ -434,6 +443,7 @@ export default function CreateScholarship() {
         applicationSteps: selectedSteps,
         isActive: true,
         thumbnail: thumbnailPreview || undefined,
+        image: thumbnailPreview || undefined,
       };
 
       const saveScholarship = (body) =>
@@ -1027,7 +1037,7 @@ export default function CreateScholarship() {
                           style={{ width: 18, height: 18, cursor: 'pointer' }}
                         />
                         {uni.thumbnail ? (
-                          <img src={uni.thumbnail} alt="" style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover' }} />
+                          <img src={resolveAssetUrl(uni.thumbnail)} alt="" style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover' }} />
                         ) : (
                           <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 'bold' }}>
                             {uni.name.charAt(0)}

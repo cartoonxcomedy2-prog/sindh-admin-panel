@@ -3,7 +3,7 @@ import { HashRouter as Router, Routes, Route, Link, Navigate, useLocation } from
 import { 
   Settings, LayoutDashboard, LogOut, Menu, X,
   Image as ImageIcon, School, 
-  History, Users2, FileText, 
+  Users2, FileText, 
   UserCircle, Building2, BookOpen
 } from 'lucide-react';
 

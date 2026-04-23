@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
-import API from '../api';
+import API, { resolveAssetUrl } from '../api';
 import imageCompression from 'browser-image-compression';
 import { getStates, getCities } from '../data/locations';
 
@@ -14,11 +14,29 @@ const extractEmbeddedUrl = (value) => {
   return matched[0].replace(/[\],);.]+$/g, '');
 };
 
+const NULLISH_FILE_VALUES = new Set([
+  'null',
+  'undefined',
+  'n/a',
+  'na',
+  'none',
+  '-',
+]);
+
+const normalizeFileValue = (value) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (NULLISH_FILE_VALUES.has(raw.toLowerCase())) return '';
+  return raw;
+};
+
+const hasFileValue = (value) => Boolean(normalizeFileValue(value));
+
 const getFileUrl = (fileName) => {
-  if (!fileName) return '';
-  const raw = fileName.toString().trim();
+  const raw = normalizeFileValue(fileName);
+  if (!raw) return '';
   const embedded = extractEmbeddedUrl(raw);
-  const sourceUrl = embedded || `${API.defaults.baseURL.replace('/api', '')}/uploads/${fileName}`;
+  const sourceUrl = embedded || resolveAssetUrl(raw);
 
   try {
     const parsed = new URL(sourceUrl);
@@ -106,6 +124,67 @@ const inferFileExtension = (value, fallback = '.pdf') => {
   return ext;
 };
 
+const detectBlobFileExtension = async (blob, fallback = '.pdf') => {
+  if (!(blob instanceof Blob)) return fallback;
+
+  try {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    if (
+      bytes.length >= 4 &&
+      bytes[0] === 0x25 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x44 &&
+      bytes[3] === 0x46
+    ) {
+      return '.pdf';
+    }
+
+    if (
+      bytes.length >= 8 &&
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47 &&
+      bytes[4] === 0x0d &&
+      bytes[5] === 0x0a &&
+      bytes[6] === 0x1a &&
+      bytes[7] === 0x0a
+    ) {
+      return '.png';
+    }
+
+    if (
+      bytes.length >= 3 &&
+      bytes[0] === 0xff &&
+      bytes[1] === 0xd8 &&
+      bytes[2] === 0xff
+    ) {
+      return '.jpg';
+    }
+
+    if (bytes.length >= 6) {
+      const head = String.fromCharCode(...bytes.slice(0, 6)).toUpperCase();
+      if (head === 'GIF87A' || head === 'GIF89A') return '.gif';
+    }
+
+    if (bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b) {
+      return '.zip';
+    }
+  } catch {
+    return fallback;
+  }
+
+  return fallback;
+};
+
+const replaceFileExtension = (fileName, extension) => {
+  const safeName = String(fileName || '').trim();
+  const safeExt = extension.startsWith('.') ? extension : `.${extension}`;
+  if (!safeName) return `document${safeExt}`;
+  const base = safeName.replace(/\.[^.\\/]+$/, '');
+  return `${base}${safeExt}`;
+};
+
 const triggerBlobDownload = (blobData, downloadName) => {
   const blobUrl = window.URL.createObjectURL(new Blob([blobData]));
   const link = document.createElement('a');
@@ -123,7 +202,11 @@ const downloadFromDirectUrl = async (url, downloadName) => {
     throw new Error('File does not exist on server');
   }
   const blob = await response.blob();
-  triggerBlobDownload(blob, downloadName);
+  const finalName = replaceFileExtension(
+    downloadName,
+    await detectBlobFileExtension(blob, inferFileExtension(downloadName, '.pdf'))
+  );
+  triggerBlobDownload(blob, finalName);
 };
 
 const parseDownloadError = async (err, fallback = 'Failed to download document') => {
@@ -152,6 +235,16 @@ const parseDownloadError = async (err, fallback = 'Failed to download document')
   return err?.message || fallback;
 };
 
+const parseApiErrorMessage = (err, fallback = 'Request failed') => {
+  const direct = err?.response?.data?.message;
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+  const nested = err?.response?.data?.error;
+  if (typeof nested === 'string' && nested.trim()) return nested.trim();
+  const generic = err?.message;
+  if (typeof generic === 'string' && generic.trim()) return generic.trim();
+  return fallback;
+};
+
 const normalizeId = (value) => {
   if (!value) return '';
   if (typeof value === 'string') return value;
@@ -165,6 +258,7 @@ const normalizeId = (value) => {
 export default function AdminApplications() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchInput, setSearchInput] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [filterState, setFilterState] = useState('');
@@ -193,6 +287,63 @@ export default function AdminApplications() {
   const [activeTab, setActiveTab] = useState('account');
   const [currentAppForModal, setCurrentAppForModal] = useState(null);
   const [studentLoading, setStudentLoading] = useState(false);
+  const [showDocModal, setShowDocModal] = useState(false);
+  const [docApp, setDocApp] = useState(null);
+
+  const getFileDisplayName = useCallback((value) => {
+    const raw = normalizeFileValue(value);
+    if (!raw) return 'Not uploaded';
+    const embedded = extractEmbeddedUrl(raw);
+    const source = (embedded || raw).split('?')[0].split('#')[0];
+    const parts = source.split(/[\\/]/).filter(Boolean);
+    const last = parts[parts.length - 1] || source;
+    try {
+      return decodeURIComponent(last);
+    } catch {
+      return last;
+    }
+  }, []);
+
+  const syncApplicationRecord = useCallback((updated) => {
+    if (!updated?._id) return;
+    setData((prev) => prev.map((a) => (a._id === updated._id ? updated : a)));
+    setSelectedApp((prev) => (prev?._id === updated._id ? updated : prev));
+    setCurrentAppForModal((prev) =>
+      prev?._id === updated._id ? updated : prev
+    );
+    setDocApp((prev) => (prev?._id === updated._id ? updated : prev));
+  }, []);
+
+  const openDocsModal = useCallback((app) => {
+    if (!app?._id) return;
+    setDocApp(app);
+    setShowDocModal(true);
+  }, []);
+
+  const closeDocsModal = useCallback(() => {
+    setShowDocModal(false);
+    setDocApp(null);
+  }, []);
+
+  const handleDownloadApplicationBundle = useCallback(
+    async (application) => {
+      const target = application || docApp;
+      if (!target?._id) return;
+      try {
+        const userName = target?.user?.name || 'applicant';
+        const preferredName = `${sanitizeFileNamePart(userName, 'applicant')}-${sanitizeFileNamePart(target._id, 'application')}-bundle.zip`;
+        const res = await API.get(`/applications/${target._id}/download-bundle`, {
+          params: { downloadName: preferredName },
+          responseType: 'blob',
+        });
+        triggerBlobDownload(res.data, preferredName);
+      } catch (err) {
+        console.error('Bundle download failed:', err);
+        alert('Failed to download ZIP bundle');
+      }
+    },
+    [docApp]
+  );
 
   const fetchApplicants = useCallback(async () => {
     setLoading(true);
@@ -206,6 +357,7 @@ export default function AdminApplications() {
           state: filterState || undefined,
           city: filterCity || undefined,
           level: levelFilter || undefined,
+          includeEligible: false,
           startDate: startDate || undefined,
           endDate: endDate || undefined,
         },
@@ -250,6 +402,14 @@ export default function AdminApplications() {
   }, [fetchApplicants]);
 
   useEffect(() => {
+    const timer = setTimeout(() => {
+      const normalized = searchInput.trim();
+      setSearchTerm((prev) => (prev === normalized ? prev : normalized));
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  useEffect(() => {
     setCurrentPage(1);
   }, [searchTerm, statusFilter, filterState, filterCity, levelFilter, startDate, endDate]);
 
@@ -266,6 +426,7 @@ export default function AdminApplications() {
       setData(prev => prev.map(a => a._id === appId ? { ...a, status: newStatus } : a));
       if (selectedApp?._id === appId) setSelectedApp(prev => ({ ...prev, status: newStatus }));
       if (currentAppForModal?._id === appId) setCurrentAppForModal(prev => ({ ...prev, status: newStatus }));
+      if (docApp?._id === appId) setDocApp(prev => ({ ...prev, status: newStatus }));
     } catch {
       alert('Failed to update status');
     }
@@ -306,14 +467,12 @@ export default function AdminApplications() {
           const res = await API.put(`/applications/${appId}/university-status`, formData, {
             headers: { 'Content-Type': 'multipart/form-data' }
           });
-          setSelectedApp(res.data.data);
-          setData(prev => prev.map(a => a._id === appId ? res.data.data : a));
+          syncApplicationRecord(res.data.data);
         } else {
           const res = await API.put(`/applications/${appId}`, formData, {
             headers: { 'Content-Type': 'multipart/form-data' }
           });
-          setSelectedApp(res.data.data);
-          setData(prev => prev.map(a => (a._id === appId || a._id === res.data.data?._id) ? res.data.data : a));
+          syncApplicationRecord(res.data.data);
         }
         alert(`${field === 'admitCard' ? 'Admit Card' : 'Offer Letter'} uploaded!`);
       } catch (err) {
@@ -329,6 +488,16 @@ export default function AdminApplications() {
     try {
       await API.delete(`/applications/${appId}`);
       setData(prev => prev.filter(a => a._id !== appId));
+      if (selectedApp?._id === appId) {
+        setSelectedApp(null);
+        setShowModal(false);
+      }
+      if (currentAppForModal?._id === appId) {
+        setCurrentAppForModal(null);
+      }
+      if (docApp?._id === appId) {
+        closeDocsModal();
+      }
       alert('Application deleted');
     } catch {
       alert('Failed to delete application');
@@ -345,29 +514,16 @@ export default function AdminApplications() {
     }
   };
 
-  const handleDateUpdate = async (appId, field, value) => {
-    try {
-      const payload = {};
-      payload[field] = value || null;
-      const res = await API.put(`/applications/${appId}`, payload);
-      setSelectedApp(res.data.data);
-      setData(prev => prev.map(a => a._id === appId ? res.data.data : a));
-    } catch (err) {
-      alert('Failed to update date: ' + err.message);
-    }
-  };
-
   const handleDeleteAppDoc = async (appId, field) => {
     if (!window.confirm(`Delete ${field === 'admitCard' ? 'Admit Card' : 'Offer Letter'}?`)) return;
     try {
       const payload = {};
       payload[field] = null;
       const res = await API.put(`/applications/${appId}`, payload);
-      setSelectedApp(res.data.data);
-      setData(prev => prev.map(a => a._id === appId ? res.data.data : a));
+      syncApplicationRecord(res.data.data);
       alert('Document deleted');
-    } catch {
-      alert('Delete failed');
+    } catch (err) {
+      alert(parseApiErrorMessage(err, 'Delete failed'));
     }
   };
 
@@ -408,8 +564,8 @@ export default function AdminApplications() {
         setStudentData({ ...(res.data.data || {}), country: ADMIN_COUNTRY });
         alert('Document uploaded');
         fetchApplicants();
-      } catch {
-        alert('Upload failed');
+      } catch (err) {
+        alert(parseApiErrorMessage(err, 'Upload failed'));
       }
     };
     input.click();
@@ -424,13 +580,12 @@ export default function AdminApplications() {
       setStudentData({ ...(userRes.data.data || {}), country: ADMIN_COUNTRY });
       alert('Document deleted');
       fetchApplicants();
-    } catch {
-      alert('Delete failed');
+    } catch (err) {
+      alert(parseApiErrorMessage(err, 'Delete failed'));
     }
   };
 
   const buildApplicationDocDownloadName = ({
-    appId,
     field,
     sourceFile,
     universityName = '',
@@ -444,7 +599,6 @@ export default function AdminApplications() {
     const ext = inferFileExtension(sourceFile, '.pdf');
     const parts = [
       sanitizeFileNamePart(userName, 'applicant'),
-      sanitizeFileNamePart(appId, 'application'),
       sanitizeFileNamePart(universityName, ''),
       docLabel,
     ].filter(Boolean);
@@ -472,7 +626,14 @@ export default function AdminApplications() {
         },
         responseType: 'blob',
       });
-      triggerBlobDownload(response.data, preferredName);
+      const finalName = replaceFileExtension(
+        preferredName,
+        await detectBlobFileExtension(
+          response.data,
+          inferFileExtension(sourceFile, inferFileExtension(preferredName, '.pdf'))
+        )
+      );
+      triggerBlobDownload(response.data, finalName);
     } catch (err) {
       console.error('Application document download failed:', err);
       const message = await parseDownloadError(err);
@@ -509,7 +670,11 @@ export default function AdminApplications() {
           responseType: 'blob',
         }
       );
-      triggerBlobDownload(response.data, safeName);
+      const finalName = replaceFileExtension(
+        safeName,
+        await detectBlobFileExtension(response.data, fallbackExt)
+      );
+      triggerBlobDownload(response.data, finalName);
     } catch (err) {
       console.error('Education download failed:', err);
       alert('Failed to download document');
@@ -524,11 +689,10 @@ export default function AdminApplications() {
     try {
       const payload = { universityId: uniId, [field]: null };
       const res = await API.put(`/applications/${appId}/university-status`, payload);
-      setSelectedApp(res.data.data);
-      setData((prev) => prev.map((a) => (a._id === appId ? res.data.data : a)));
+      syncApplicationRecord(res.data.data);
     } catch (err) {
       console.error('Offered university doc delete failed:', err);
-      alert('Failed to delete university document');
+      alert(parseApiErrorMessage(err, 'Failed to delete university document'));
     }
   };
 
@@ -576,8 +740,7 @@ export default function AdminApplications() {
         universityId: uniId, 
         status: newStatus 
       });
-      setSelectedApp(res.data.data);
-      setData(prev => prev.map(a => a._id === appId ? res.data.data : a));
+      syncApplicationRecord(res.data.data);
     } catch {
       alert('Failed to update status');
     }
@@ -601,8 +764,7 @@ export default function AdminApplications() {
 
     try {
       const res = await API.put(`/applications/${appId}`, { offeredUniversities: newList });
-      setSelectedApp(res.data.data);
-      setData(prev => prev.map(a => a._id === appId ? res.data.data : a));
+      syncApplicationRecord(res.data.data);
     } catch {
       alert('Failed to update universities');
     }
@@ -695,38 +857,6 @@ export default function AdminApplications() {
     fontSize: '12px',
     outline: 'none',
     color: '#1e293b'
-  };
-
-  const tableStyle = {
-    width: '100%',
-    borderCollapse: 'separate',
-    borderSpacing: 0,
-    tableLayout: 'fixed',
-    fontSize: 12
-  };
-
-  const tableHeaderCell = {
-    padding: '12px 10px',
-    whiteSpace: 'normal',
-    wordBreak: 'break-word',
-    overflowWrap: 'anywhere',
-    verticalAlign: 'top'
-  };
-
-  const tableBodyCell = {
-    padding: '12px 10px',
-    whiteSpace: 'normal',
-    wordBreak: 'break-word',
-    overflowWrap: 'anywhere',
-    verticalAlign: 'top'
-  };
-
-  const compactActionButtonStyle = {
-    minWidth: 28,
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    padding: 0
   };
 
   const getPersonalInfo = (student) => student?.education?.personalInfo || {};
@@ -874,23 +1004,26 @@ export default function AdminApplications() {
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 15 }}>
           {fields.map(f => {
-            const fileName = eduData[f.key];
+            const fileName = normalizeFileValue(
+              f.isPersonalInfo ? personalInfo?.[f.key] : eduData[f.key]
+            );
+            const hasFile = hasFileValue(fileName);
             const displayLabel = `${studentData?.name}_${title}_${f.label}`.replace(/\s+/g, '_');
             return (
               <div key={f.key} className="doc-tile" style={{ background: 'var(--bg-card)', padding: 15, borderRadius: 12, border: '1px solid var(--border)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                   <span style={{ fontSize: 13, fontWeight: 700 }}>{f.label}</span>
-                  <span className={`badge ${fileName ? 'badge-active' : ''}`} style={{ fontSize: 10 }}>
-                    {fileName ? 'Uploaded' : 'Pending'}
+                  <span className={`badge ${hasFile ? 'badge-active' : ''}`} style={{ fontSize: 10 }}>
+                    {hasFile ? 'Uploaded' : 'Pending'}
                   </span>
                 </div>
-                {fileName && (
+                {hasFile && (
                   <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12, wordBreak: 'break-all', opacity: 1, fontWeight: 500 }}>
-                    Name: {displayLabel}.pdf
+                    File: {fileName.split('/').pop()}
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {fileName ? (
+                  {hasFile ? (
                     <>
                       <a
                         href={getFileUrl(fileName)}
@@ -949,32 +1082,64 @@ export default function AdminApplications() {
   };
 
   return (
-    <div className="applicants-page" style={{ overflowX: 'hidden' }}>
-      <div className="table-card">
-        <div className="table-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
-              
-              <div>
-                <h2 style={{ color: "#000000", fontWeight: 900 }}>👥 All Applications</h2>
-                <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
+    <div className="applicants-page" style={{ padding: '0', width: '100%', maxWidth: 'none' }}>
+      <div className="table-card" style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', background: 'transparent', width: '100%', margin: 0 }}>
+        <div
+          className="table-header"
+          style={{
+            flexDirection: 'column',
+            alignItems: 'flex-start',
+            gap: '16px',
+            padding: '24px',
+            background: '#ffffff',
+            borderRadius: '20px 20px 0 0',
+            borderBottom: '1px solid var(--border)',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
+            <div>
+              <h2>👥 All Applications</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
                   Managing all applications for your posts.
                 </p>
+                <div style={{ display: 'flex', gap: 8, fontSize: 11 }}>
+                  <span style={{ background: '#dcfce7', color: '#166534', padding: '2px 8px', borderRadius: '5px', fontWeight: 700 }}>
+                    Selected: {data.filter(a => a.status === 'Selected').length}
+                  </span>
+                  <span style={{ background: '#fee2e2', color: '#991b1b', padding: '2px 8px', borderRadius: '5px', fontWeight: 700 }}>
+                    Rejected: {data.filter(a => a.status === 'Rejected').length}
+                  </span>
+                  <span style={{ background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: '5px', fontWeight: 700 }}>
+                    Applied: {data.filter(a => a.status === 'Applied').length}
+                  </span>
+                </div>
               </div>
             </div>
-            <span className="badge badge-active" style={{ fontSize: 14 }}>
-              Total: {serverPagination.total}
-            </span>
           </div>
+          <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
+            Total Results: {serverPagination.total}
+          </span>
 
-          <div className="filter-bar" style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', width: '100%', padding: '16px', background: '#ffffff', border: '1px solid var(--border)', borderRadius: '16px', boxShadow: '0 2px 10px rgba(0,0,0,0.02)' }}>
+          <div className="filter-bar" style={{ 
+            display: 'flex', 
+            flexWrap: 'wrap', 
+            gap: '12px', 
+            width: '100%', 
+            padding: '16px 0 0 0', 
+            background: 'transparent',
+            border: 'none',
+            borderRadius: '0',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+          }}>
             <div className="search-input-group" style={{ position: 'relative', flex: 1, minWidth: '200px' }}>
                 <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', opacity: 0.5 }}>🔍</span>
                 <input 
                     type="text" 
                     placeholder="Search name, email, or university/scholarship..." 
-                    value={searchTerm}
-                    onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
                     style={{ width: '100%', padding: '12px 12px 12px 40px', borderRadius: '10px', border: '1px solid var(--border)', background: '#f8fafc', color: 'var(--text-primary)', fontSize: '14px', outline: 'none' }}
                 />
             </div>
@@ -1002,163 +1167,302 @@ export default function AdminApplications() {
                 <option value="master">Master ({levelCounts.master})</option>
                 <option value="phd">PhD ({levelCounts.phd})</option>
             </select>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', borderRadius: '10px', border: '1px solid var(--border)' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Applied:</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <span style={{ fontSize: '11px', color: '#94a3b8' }}>From</span>
+                <input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); setCurrentPage(1); }} style={dateInputStyle} title="Start Date" />
+                <span style={{ fontSize: '11px', color: '#94a3b8' }}>To</span>
+                <input type="date" value={endDate} onChange={(e) => { setEndDate(e.target.value); setCurrentPage(1); }} style={dateInputStyle} title="End Date" />
+                {(startDate || endDate) && (
+                  <button
+                    onClick={() => { setStartDate(''); setEndDate(''); }}
+                    style={{ border: 'none', background: 'none', color: '#ef4444', fontSize: '14px', cursor: 'pointer', padding: '0 5px' }}
+                    title="Reset Dates"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {selectedIds.length > 0 && (
+              <div className="bulk-actions" style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '20px',
+                padding: '12px 24px',
+                background: '#ffffff',
+                borderRadius: '12px',
+                border: '1px solid #e2e8f0',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                animation: 'slideDown 0.3s ease-out'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#4f46e5' }}></div>
+                  <span style={{ fontSize: '14px', fontWeight: 700, color: '#1e293b' }}>{selectedIds.length} Selected</span>
+                </div>
+
+                <div style={{ height: '24px', width: '1px', background: '#e2e8f0' }}></div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 500 }}>Bulk Action:</span>
+                  <select
+                    onChange={(e) => handleBulkStatusUpdate(e.target.value)}
+                    style={{
+                      padding: '8px 16px',
+                      borderRadius: '8px',
+                      border: '1px solid #e2e8f0',
+                      color: '#1e293b',
+                      fontWeight: 600,
+                      fontSize: '13px',
+                      outline: 'none',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    defaultValue=""
+                  >
+                    <option value="" disabled>Update Status to...</option>
+                    {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+
+                <button
+                  onClick={() => setSelectedIds([])}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#64748b',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    transition: 'all 0.2s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                  onMouseOver={(e) => e.target.style.color = '#ef4444'}
+                  onMouseOut={(e) => e.target.style.color = '#64748b'}
+                >
+                  ✕ Clear Selection
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
+        <div style={{ background: '#ffffff', borderRadius: '0 0 20px 20px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
         {loading ? (
           <div className="loading"><div className="spinner"></div> Loading...</div>
         ) : filteredData.length === 0 ? (
           <div className="empty-msg">No applications found matching your criteria.</div>
         ) : (
           <>
-            <div style={{ width: '100%', overflowX: 'hidden' }}>
-            <table style={tableStyle}>
+            <div style={{ width: '100%', overflowX: 'auto' }}>
+            <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'separate', borderSpacing: '0' }}>
               <thead>
                 <tr>
-                  <th style={{ ...tableHeaderCell, width: '4%' }}>#</th>
-                  <th style={{ ...tableHeaderCell, width: '17%' }}>Student Info</th>
-                  <th style={{ ...tableHeaderCell, width: '12%' }}>Location</th>
-                  <th style={{ ...tableHeaderCell, width: '21%' }}>Applied Info</th>
-                  <th style={{ ...tableHeaderCell, width: '18%' }}>Programs / Level</th>
-                  <th style={{ ...tableHeaderCell, width: '10%' }}>Status</th>
-                  <th style={{ ...tableHeaderCell, width: '8%' }}>Date</th>
-                  <th
-                    style={{
-                      ...tableHeaderCell,
-                      textAlign: 'center',
-                      width: '10%',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    Actions
+                  <th style={{ padding: '10px 12px', width: '84px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <input
+                        type="checkbox"
+                        onChange={handleSelectAll}
+                        checked={currentItems.length > 0 && selectedIds.length === currentItems.length}
+                        style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#4f46e5' }}
+                      />
+                      <span>#</span>
+                    </div>
                   </th>
+                  <th style={{ padding: '10px 12px', minWidth: '170px' }}>Student Info</th>
+                  <th style={{ padding: '10px 12px', minWidth: '150px' }}>Location</th>
+                  <th style={{ padding: '10px 12px', minWidth: '220px' }}>Applied Info</th>
+                  <th style={{ padding: '10px 12px', minWidth: '220px' }}>Programs / Level</th>
+                  <th style={{ padding: '10px 12px', minWidth: '130px' }}>Docs</th>
+                  <th style={{ padding: '10px 12px', minWidth: '110px' }}>Applied On</th>
+                  <th style={{ textAlign: 'center', padding: '10px 12px', minWidth: '130px' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {currentItems.map((app, index) => {
                   const serialNumber = ((currentPage - 1) * serverPagination.limit) + index + 1;
                   return (
-                    <tr key={app._id}>
-                      <td style={{ ...tableBodyCell, color: 'var(--text-secondary)', fontWeight: 'bold' }}>{serialNumber}</td>
-                      <td style={tableBodyCell}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                          <div className="admin-avatar" style={{ width: 32, height: 32, fontSize: 12 }}>
-                            {app.user?.name?.charAt(0) || '?'}
+                    <tr key={app._id} style={{ background: selectedIds.includes(app._id) ? '#f8fafc' : 'transparent', transition: 'background 0.2s' }}>
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(app._id)}
+                            onChange={() => handleSelectOne(app._id)}
+                            style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#4f46e5' }}
+                          />
+                          <span style={{ color: 'var(--text-secondary)', fontWeight: 800, fontSize: '13px' }}>{serialNumber}</span>
+                        </div>
+                      </td>
+
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ wordBreak: 'break-word', maxWidth: '220px' }}>
+                          <div style={{ fontWeight: 'bold', fontSize: '12px', color: '#000000', lineHeight: '1.2' }}>
+                            {app.user?.name || 'Unknown User'}
                           </div>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontWeight: 'bold', overflowWrap: 'anywhere' }}>{app.user?.name || 'Unknown User'}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>{app.user?.email}</div>
+                          <div style={{ fontSize: '10px', color: '#4b5563', marginTop: '2px' }}>
+                            {app.user?.email || 'N/A'}
                           </div>
                         </div>
                       </td>
-                      <td style={tableBodyCell}>
-                        <div style={{ fontSize: 13, fontWeight: 'bold', color: 'var(--primary)' }}>{app.user?.country || ADMIN_COUNTRY}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
-                          {app.user?.city ? `${app.user.city}, ${app.user.state}` : 'Location unknown'}
-                        </div>
+
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ fontSize: 11, color: '#000000' }}>{app.user?.state || 'N/A'}</div>
+                        <div style={{ fontSize: 11, color: '#000000' }}>{app.user?.city || 'N/A'}</div>
                         {app.user?.address && (
-                          <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 2, overflowWrap: 'anywhere' }}>
+                          <div style={{ fontSize: 10, color: '#64748b', marginTop: 2, overflowWrap: 'anywhere' }}>
                             {app.user.address}
                           </div>
                         )}
                       </td>
-                      <td style={tableBodyCell}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                           {app.type === 'University' && app.university?.thumbnail ? (
-                            <img 
-                              src={`${API.defaults.baseURL.replace('/api', '')}/uploads/${app.university.thumbnail}`} 
-                              alt="logo" 
-                              style={{ width: 32, height: 32, borderRadius: 6, objectFit: 'cover', border: '1px solid var(--border)' }}
+                            <img
+                              src={resolveAssetUrl(app.university.thumbnail)}
+                              alt=""
+                              style={{ width: 30, height: 30, borderRadius: 8, objectFit: 'cover', border: '1px solid var(--border)' }}
                             />
                           ) : (
-                            <div style={{ width: 32, height: 32, borderRadius: 6, background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>
-                              {app.type === 'University' ? '🏛️' : '🎓'}
+                            <div style={{ width: 30, height: 30, borderRadius: 8, background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <span style={{ fontSize: 12 }}>{app.type === 'University' ? 'U' : 'S'}</span>
                             </div>
                           )}
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: 13, overflowWrap: 'anywhere' }}>{app.scholarship?.title || app.university?.name}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>{app.type}</div>
+                          <div style={{ wordBreak: 'break-word', minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: '11px', color: '#374151' }}>
+                              {app.scholarship?.title || app.university?.name || 'N/A'}
+                            </div>
+                            <div style={{ fontSize: 10, color: '#64748b', marginTop: 2, fontWeight: 700 }}>
+                              {app.type || 'Application'}
+                            </div>
                           </div>
                         </div>
                       </td>
-                      <td style={tableBodyCell}>
-                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                          {app.selectedPrograms?.map((p, idx) => (
-                            <span key={idx} style={{ 
-                              fontSize: 10, 
-                              padding: '3px 8px', 
-                              border: '1px solid var(--primary-light)', 
-                              borderRadius: '4px',
-                              color: 'var(--primary)',
-                              fontWeight: 600,
-                              whiteSpace: 'normal',
-                              wordBreak: 'break-word',
-                              overflowWrap: 'anywhere',
-                              maxWidth: '100%'
-                            }}>
-                              Applied for {p.programName}
-                            </span>
-                          ))}
-                          {(!app.selectedPrograms || app.selectedPrograms.length === 0) && (
-                            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>-</span>
+
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ wordBreak: 'break-word', minWidth: '180px' }}>
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '2px', flexWrap: 'wrap' }}>
+                            {app.selectedPrograms?.length ? app.selectedPrograms.map((p, idx) => (
+                              <span key={idx} style={{
+                                fontSize: 10,
+                                padding: '0',
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--primary)',
+                                fontWeight: 600,
+                                whiteSpace: 'normal',
+                                overflowWrap: 'anywhere'
+                              }}>
+                                {idx > 0 ? ', ' : ''}{p.programName}
+                              </span>
+                            )) : (
+                              <span style={{ fontSize: 11, color: '#94a3b8' }}>No program selected</span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ display: 'grid', gap: 6 }}>
+                          <button
+                            onClick={() => openDocsModal(app)}
+                            style={{
+                              background: '#0F766E',
+                              border: 'none',
+                              color: 'white',
+                              fontSize: '11px',
+                              padding: '6px 10px',
+                              borderRadius: '6px',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              width: '100%'
+                            }}
+                            title="Application documents"
+                          >
+                            DOCS
+                          </button>
+                          {app.scholarship && (
+                            <button
+                              onClick={() => openManageModal(app)}
+                              style={{
+                                background: '#334155',
+                                border: 'none',
+                                color: 'white',
+                                fontSize: '10px',
+                                padding: '5px 8px',
+                                borderRadius: '6px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                width: '100%'
+                              }}
+                              title="Scholarship university-wise docs/status"
+                            >
+                              MANAGE
+                            </button>
                           )}
                         </div>
                       </td>
-                      <td style={tableBodyCell}>
-                        <select 
-                          value={app.status} 
-                          onChange={(e) => handleStatusChange(app._id, e.target.value)}
-                          style={{ 
-                            width: '100%',
-                            padding: '6px 8px', 
-                            borderRadius: 8, 
-                            background: 'rgba(0,0,0,0.05)', 
-                            border: '1px solid var(--border)',
-                            color: 'var(--text-primary)',
-                            fontSize: 12
-                          }}
-                        >
-                          {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                      </td>
-                      <td style={{ ...tableBodyCell, fontSize: 12, color: 'var(--text-secondary)' }}>
+
+                      <td style={{ fontSize: 11, color: '#000000', padding: '10px 12px', fontWeight: 500 }}>
                         {new Date(app.appliedAt).toLocaleDateString()}
                       </td>
-                      <td style={tableBodyCell}>
+
+                      <td style={{ padding: '10px 12px' }}>
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
-                          <button 
-                            className="btn-icon" 
-                            title="View/Edit Profile"
+                          <button
                             onClick={() => openStudentModal(app)}
-                            style={{ ...compactActionButtonStyle, background: '#6366F1', color: 'white' }}
+                            style={{
+                              background: '#4F46E5',
+                              border: 'none',
+                              color: 'white',
+                              fontSize: '11px',
+                              padding: '4px 10px',
+                              borderRadius: '6px',
+                              fontWeight: 600,
+                              cursor: 'pointer'
+                            }}
                           >
-                            👁️
+                            VIEW
                           </button>
-                          {app.scholarship && (
-                            <button 
-                              className="btn-icon" 
-                              title="Manage Universities"
-                              onClick={() => openManageModal(app)}
-                              style={{ ...compactActionButtonStyle, background: 'var(--primary-light)', color: 'white' }}
-                            >
-                              🏛️
-                            </button>
-                          )}
-                          <button 
-                            className={`btn-icon ${app.admitCard ? 'success' : ''}`} 
-                            title="Admit Card"
-                            onClick={() => handleFileUpload(app._id, 'admitCard')}
-                            style={{ ...compactActionButtonStyle, background: app.admitCard ? 'var(--success)' : '' }}
+                          <button
+                            onClick={() => deleteApplication(app._id)}
+                            style={{
+                              background: '#fee2e2',
+                              border: 'none',
+                              color: '#ef4444',
+                              padding: '6px',
+                              borderRadius: '8px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.2s',
+                              width: '32px',
+                              height: '32px'
+                            }}
+                            title="Delete"
+                            onMouseOver={(e) => {
+                              e.currentTarget.style.background = '#fecaca';
+                              e.currentTarget.style.transform = 'scale(1.1)';
+                            }}
+                            onMouseOut={(e) => {
+                              e.currentTarget.style.background = '#fee2e2';
+                              e.currentTarget.style.transform = 'scale(1)';
+                            }}
                           >
-                            🪪
-                          </button>
-                          <button 
-                            className={`btn-icon ${app.offerLetter ? 'success' : ''}`} 
-                            title="Offer Letter"
-                            onClick={() => handleFileUpload(app._id, 'offerLetter')}
-                            style={{ ...compactActionButtonStyle, background: app.offerLetter ? 'var(--success)' : '' }}
-                          >
-                            ✉️
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                              <line x1="10" y1="11" x2="10" y2="17"></line>
+                              <line x1="14" y1="11" x2="14" y2="17"></line>
+                            </svg>
                           </button>
                         </div>
                       </td>
@@ -1211,21 +1515,32 @@ export default function AdminApplications() {
             </div>
           </>
         )}
+        </div>
       </div>
 
       {showStudentModal && studentData && (
         <div className="modal-overlay">
           <div className="modal-content" style={{ maxWidth: '900px', width: '95%', maxHeight: '90vh', overflow: 'hidden' }}>
-            <div className="modal-header" style={{ flexWrap: 'wrap', gap: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
-                <div className="admin-avatar" style={{ width: 45, height: 45 }}>{studentData.name?.charAt(0)}</div>
-                <div>
-                  <h3 style={{ margin: 0 }}>Student Profile</h3>
-                  <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>{studentData.email}</span>
-                </div>
-              </div>
-              <button className="btn-close" onClick={() => setShowStudentModal(false)}>✕</button>
-            </div>
+	            <div className="modal-header" style={{ flexWrap: 'wrap', gap: 10 }}>
+	              <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
+	                <div className="admin-avatar" style={{ width: 45, height: 45 }}>{studentData.name?.charAt(0)}</div>
+	                <div>
+	                  <h3 style={{ margin: 0 }}>Student Profile</h3>
+	                  <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>{studentData.email}</span>
+	                </div>
+	              </div>
+	              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+	                <button
+	                  className="btn-action"
+	                  onClick={() => handleDownloadApplicationBundle(currentAppForModal)}
+	                  style={{ whiteSpace: 'nowrap' }}
+	                  title="Download full applicant bundle"
+	                >
+	                  Download Full Bundle (ZIP)
+	                </button>
+	                <button className="btn-close" onClick={() => setShowStudentModal(false)}>✕</button>
+	              </div>
+	            </div>
             
             <div className="modal-tabs" style={{ display: 'flex', borderBottom: '1px solid var(--border)', padding: '0 20px', gap: 30 }}>
               {[{ id: 'account', label: 'Personal Profile' }, { id: 'education', label: 'Education Docs' }].map(tab => {
@@ -1354,7 +1669,8 @@ export default function AdminApplications() {
                   {renderIdentityBlock()}
 
                   {renderEducationSection('National ID', 'nationalId', [
-                    { key: 'file', label: 'ID Card PDF' }
+                    { key: 'file', label: 'ID Card PDF' },
+                    { key: 'fatherCnicFile', label: 'Father CNIC Card', isPersonalInfo: true }
                   ])}
 
                   {renderEducationSection('Matric / O-Level', 'matric', [
@@ -1372,6 +1688,8 @@ export default function AdminApplications() {
                     { key: 'transcript', label: 'Transcript' },
                     { key: 'certificate', label: 'Certificate' }
                   ])}
+
+                   {/* Higher-education sections */}
 
                   {renderEducationSection('Masters / PhD Degree', 'masters', [
                     { key: 'transcript', label: 'Transcript' },
@@ -1396,6 +1714,10 @@ export default function AdminApplications() {
                       { key: 'recommendationLetter', label: 'Recommendation Letter' }
                     ])
                   }
+
+                  <div style={{ marginTop: 25, padding: '15px 20px', borderTop: '1px solid var(--border)', textAlign: 'right' }}>
+                    <button className="btn-publish" onClick={handleStudentUpdate}>✅ Save All Education Changes</button>
+                  </div>
                 </div>
               )
               )}
@@ -1430,6 +1752,8 @@ export default function AdminApplications() {
                           normalizeId(u?.university?._id || u?.university) === uniId
                       );
                       const isOffered = !!offeredData;
+                      const hasAdmitCard = hasFileValue(offeredData?.admitCard);
+                      const hasOfferLetter = hasFileValue(offeredData?.offerLetter);
 
                       return (
                         <div key={uniId} className={`uni-manage-item ${isOffered ? 'active' : ''}`} style={{
@@ -1448,7 +1772,7 @@ export default function AdminApplications() {
                                 style={{ width: 18, height: 18, cursor: 'pointer' }}
                               />
                               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                {uni.thumbnail && <img src={uni.thumbnail} alt="" style={{ width: 30, height: 30, borderRadius: '50%' }} />}
+                                {uni.thumbnail && <img src={resolveAssetUrl(uni.thumbnail)} alt="" style={{ width: 30, height: 30, borderRadius: '50%' }} />}
                                 <span style={{ fontWeight: 'bold' }}>{uni.name}</span>
                               </div>
                             </div>
@@ -1472,13 +1796,13 @@ export default function AdminApplications() {
                                 <div style={{ display: 'grid', gap: 8 }}>
                                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                                     <button
-                                      className={`btn-icon small ${offeredData.admitCard ? 'success' : ''}`}
+                                      className={`btn-icon small ${hasAdmitCard ? 'success' : ''}`}
                                       onClick={() => handleFileUpload(selectedApp._id, 'admitCard', uniId)}
                                       title="Upload Admit Card"
                                     >
-                                      🪪 {offeredData.admitCard ? '✓' : ''}
+                                      🪪 {hasAdmitCard ? '✓' : ''}
                                     </button>
-                                    {offeredData.admitCard && (
+                                    {hasAdmitCard && (
                                       <>
                                         <a
                                           href={getFileUrl(offeredData.admitCard)}
@@ -1513,13 +1837,13 @@ export default function AdminApplications() {
                                   </div>
                                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                                     <button
-                                      className={`btn-icon small ${offeredData.offerLetter ? 'success' : ''}`}
+                                      className={`btn-icon small ${hasOfferLetter ? 'success' : ''}`}
                                       onClick={() => handleFileUpload(selectedApp._id, 'offerLetter', uniId)}
                                       title="Upload Offer Letter"
                                     >
-                                      ✉️ {offeredData.offerLetter ? '✓' : ''}
+                                      ✉️ {hasOfferLetter ? '✓' : ''}
                                     </button>
-                                    {offeredData.offerLetter && (
+                                    {hasOfferLetter && (
                                       <>
                                         <a
                                           href={getFileUrl(offeredData.offerLetter)}
@@ -1562,91 +1886,162 @@ export default function AdminApplications() {
                   )}
                 </div>
               )}
-              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 12 }}>
-                <h4 style={{ marginBottom: 12 }}>General Admission Documents</h4>
-                <div style={{ display: 'grid', gap: 12 }}>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <button
-                      className={`btn-publish ${selectedApp.admitCard ? 'success' : ''}`}
-                      onClick={() => handleFileUpload(selectedApp._id, 'admitCard')}
-                    >
-                      {selectedApp.admitCard ? 'Replace Admit Card' : 'Upload Admit Card'}
-                    </button>
-                    {selectedApp.admitCard && (
-                      <>
-                        <a
-                          href={getFileUrl(selectedApp.admitCard)}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ padding: '8px 10px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 8, textDecoration: 'none' }}
-                        >
-                          View
-                        </a>
-                        <button
-                          onClick={() =>
-                            downloadApplicationDoc({
-                              appId: selectedApp._id,
-                              field: 'admitCard',
-                              sourceFile: selectedApp.admitCard,
-                            })
-                          }
-                          style={{ padding: '8px 10px', background: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 8, cursor: 'pointer' }}
-                        >
-                          Download
-                        </button>
-                        <button
-                          onClick={() => handleDeleteAppDoc(selectedApp._id, 'admitCard')}
-                          style={{ padding: '8px 10px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: 8, cursor: 'pointer' }}
-                        >
-                          Delete
-                        </button>
-                      </>
-                    )}
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <button
-                      className={`btn-publish ${selectedApp.offerLetter ? 'success' : ''}`}
-                      onClick={() => handleFileUpload(selectedApp._id, 'offerLetter')}
-                    >
-                      {selectedApp.offerLetter ? 'Replace Offer Letter' : 'Upload Offer Letter'}
-                    </button>
-                    {selectedApp.offerLetter && (
-                      <>
-                        <a
-                          href={getFileUrl(selectedApp.offerLetter)}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ padding: '8px 10px', background: 'white', border: '1px solid #cbd5e1', borderRadius: 8, textDecoration: 'none' }}
-                        >
-                          View
-                        </a>
-                        <button
-                          onClick={() =>
-                            downloadApplicationDoc({
-                              appId: selectedApp._id,
-                              field: 'offerLetter',
-                              sourceFile: selectedApp.offerLetter,
-                            })
-                          }
-                          style={{ padding: '8px 10px', background: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 8, cursor: 'pointer' }}
-                        >
-                          Download
-                        </button>
-                        <button
-                          onClick={() => handleDeleteAppDoc(selectedApp._id, 'offerLetter')}
-                          style={{ padding: '8px 10px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: 8, cursor: 'pointer' }}
-                        >
-                          Delete
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
+              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 12 }}>
+                <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
+                  General admit/offer files are now managed from the table <strong>DOCS</strong> button.
+                </p>
               </div>
             </div>
             <div className="modal-footer">
               <button className="btn-publish" onClick={() => setShowModal(false)} style={{ width: '100%' }}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDocModal && docApp && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '760px', width: '92%', overflow: 'hidden' }}>
+            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0 }}>
+                <h3 style={{ margin: 0 }}>Application Documents</h3>
+                <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
+                  {docApp.user?.name || 'Applicant'} - {docApp.university?.name || docApp.scholarship?.title || 'Application'}
+                </p>
+              </div>
+              <button className="btn-close" onClick={closeDocsModal}>✕</button>
+            </div>
+
+            <div className="modal-body" style={{ display: 'grid', gap: 12 }}>
+              <div
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 12,
+                  padding: 12,
+                  background: '#fff',
+                  display: 'grid',
+                  gap: 8,
+                }}
+              >
+                <strong style={{ fontSize: 13 }}>Application Status</strong>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <select
+                    value={docApp.status || 'Applied'}
+                    onChange={(e) => handleStatusChange(docApp._id, e.target.value)}
+                    style={{
+                      minWidth: 170,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: '1px solid var(--border)',
+                      background: '#fff',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: '#0f172a',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {ALL_STATUSES.map((statusOption) => (
+                      <option key={statusOption} value={statusOption}>
+                        {statusOption}
+                      </option>
+                    ))}
+                  </select>
+                  <span style={{ fontSize: 11, color: '#64748b' }}>
+                    Update applicant stage from here.
+                  </span>
+                </div>
+              </div>
+
+              {[
+                { field: 'admitCard', title: 'Admit Card' },
+                { field: 'offerLetter', title: 'Offer Letter' },
+              ].map((doc) => {
+                const fileValue = normalizeFileValue(docApp?.[doc.field]);
+                const hasFile = hasFileValue(fileValue);
+                const displayName = getFileDisplayName(fileValue);
+                return (
+                  <div
+                    key={doc.field}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 12,
+                      padding: 12,
+                      background: '#fff',
+                      display: 'grid',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <strong style={{ fontSize: 13 }}>{doc.title}</strong>
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '3px 8px',
+                          borderRadius: 999,
+                          color: hasFile ? '#166534' : '#92400e',
+                          background: hasFile ? '#dcfce7' : '#fef3c7',
+                        }}
+                      >
+                        {hasFile ? 'Uploaded' : 'Missing'}
+                      </span>
+                    </div>
+
+                    <div style={{ fontSize: 12, color: '#475569', overflowWrap: 'anywhere' }}>
+                      {displayName}
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        className="btn-action-primary"
+                        onClick={() => handleFileUpload(docApp._id, doc.field)}
+                      >
+                        {hasFile ? 'Change' : 'Upload'}
+                      </button>
+                      {hasFile && (
+                        <a
+                          href={getFileUrl(fileValue)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn-action"
+                          style={{ textDecoration: 'none' }}
+                        >
+                          View
+                        </a>
+                      )}
+                      {hasFile && (
+                        <button
+                          className="btn-action"
+                          onClick={() =>
+                            downloadApplicationDoc({
+                              appId: docApp._id,
+                              field: doc.field,
+                              sourceFile: fileValue,
+                            })
+                          }
+                        >
+                          Download
+                        </button>
+                      )}
+                      {hasFile && (
+                        <button
+                          className="btn-action"
+                          style={{ borderColor: '#fecaca', color: '#b91c1c', background: '#fff1f2' }}
+                          onClick={() => handleDeleteAppDoc(docApp._id, doc.field)}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', paddingTop: 4 }}>
+                <button className="btn-action" onClick={() => handleDownloadApplicationBundle(docApp)}>
+                  Download ZIP
+                </button>
+              </div>
             </div>
           </div>
         </div>

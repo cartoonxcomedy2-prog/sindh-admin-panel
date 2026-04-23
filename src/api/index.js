@@ -2,7 +2,6 @@ import axios from 'axios';
 
 const ENV_API_BASE = import.meta.env.VITE_API_BASE_URL;
 const DEFAULT_API_BASE = 'https://azlantraders.store/api';
-const LEGACY_RENDER_API_HOST = 'sindh-backend-api.onrender.com';
 const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 45000);
 const API_RETRY_DELAY_MS = Number(import.meta.env.VITE_API_RETRY_DELAY_MS || 1500);
 const API_MAX_TIMEOUT_RETRIES = Number(import.meta.env.VITE_API_MAX_TIMEOUT_RETRIES || 1);
@@ -130,10 +129,16 @@ const shouldCacheGet = (config = {}) => {
     url.includes('/users/profile') ||
     url.includes('/users/login') ||
     url.includes('/users/register');
+  const isVolatileAdminPath =
+    url.includes('/applications') ||
+    url.includes('/users') ||
+    url.includes('/admin/list') ||
+    url.includes('/account');
   return (
     method === 'get' &&
     !skipCache &&
     !isSensitiveAuthPath &&
+    !isVolatileAdminPath &&
     responseType !== 'blob' &&
     responseType !== 'arraybuffer' &&
     GET_CACHE_TTL_MS > 0
@@ -270,7 +275,19 @@ API.interceptors.response.use(
     }
 
     const status = error?.response?.status;
-    if (status === 401 || status === 403) {
+    const responseMessage = String(error?.response?.data?.message || '')
+      .trim()
+      .toLowerCase();
+    const shouldForceLogout =
+      status === 401 ||
+      (status === 403 &&
+        (
+          responseMessage.includes('session expired') ||
+          responseMessage.includes('token failed') ||
+          responseMessage.includes('not authorized, no token') ||
+          responseMessage.includes('account inactive')
+        ));
+    if (shouldForceLogout) {
       clearStoredSession();
       clearApiGetCache();
       redirectToLogin();
@@ -298,8 +315,18 @@ export const resolveAssetUrl = (value) => {
   if (raw.startsWith('data:')) return raw;
 
   const server = getServerBaseUrl();
+  if (raw.startsWith('/api/uploads/')) {
+    return `${server}${raw.replace(/^\/api/, '')}`;
+  }
+  if (raw.startsWith('api/uploads/')) {
+    return `${server}/${raw.replace(/^api\//, '')}`;
+  }
   if (raw.startsWith('/uploads/')) return `${server}${raw}`;
   if (raw.startsWith('uploads/')) return `${server}/${raw}`;
+  const uploadsIndex = raw.indexOf('/uploads/');
+  if (uploadsIndex >= 0) {
+    return `${server}${raw.substring(uploadsIndex)}`;
+  }
   return `${server}/uploads/${raw}`;
 };
 

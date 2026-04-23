@@ -9,6 +9,7 @@ export default function UniHistory() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
+  const [resettingId, setResettingId] = useState('');
   const itemsPerPage = 10;
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -49,6 +50,46 @@ export default function UniHistory() {
     }
   };
 
+  const handleResetCycle = async (university) => {
+    if (!university?._id) return;
+    const shouldReset = confirm(
+      `Enable fresh apply cycle for "${university.name}"? Users will be able to apply again.`
+    );
+    if (!shouldReset) return;
+
+    const shouldCleanup = confirm(
+      'Also clear old tracking, admit/offer documents, and notifications? Click OK for full cleanup, Cancel for reapply-only.'
+    );
+
+    let shouldPurge = false;
+    if (shouldCleanup) {
+      shouldPurge = confirm(
+        'Delete ALL applications for this university from database for a fully fresh season? OK = hard delete, Cancel = keep history but mark reapply.'
+      );
+    }
+
+    setResettingId(university._id);
+    try {
+      const res = await API.post('/applications/reset-opportunity', {
+        type: 'university',
+        opportunityId: university._id,
+        clearTracking: shouldCleanup,
+        clearDocuments: shouldCleanup,
+        clearNotifications: shouldCleanup,
+        purgeApplications: shouldPurge,
+      });
+      const info = res.data?.data || {};
+      alert(
+        `Cycle reset done.\nMatched: ${info.matched || 0}\nUpdated: ${info.updated || 0}\nDeleted Applications: ${info.deletedApplications || 0}\nEligible: ${info.markedReapplyEligible || 0}\nFiles Deleted: ${info.deletedFiles || 0}`
+      );
+      fetchData();
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to reset application cycle');
+    } finally {
+      setResettingId('');
+    }
+  };
+
   const getStatus = (deadline) => {
     if (!deadline) return { label: 'No Deadline', color: 'var(--success)' };
     
@@ -69,6 +110,16 @@ export default function UniHistory() {
         : { label: 'Active', color: 'var(--success)' };
     } catch {
       return { label: 'Active', color: 'var(--success)' };
+    }
+  };
+  const formatOptionalDate = (value) => {
+    if (!value) return '';
+    try {
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) return String(value);
+      return parsed.toISOString().split('T')[0];
+    } catch {
+      return String(value);
     }
   };
 
@@ -152,7 +203,7 @@ export default function UniHistory() {
       const src = resolveAssetUrl(u.thumbnail);
       return <img src={src} alt={u.name} />;
     }
-    return <span style={{ fontSize: 20 }}>🏛️</span>;
+    return <span style={{ fontSize: 20 }}>UNI</span>;
   };
 
   return (
@@ -160,7 +211,7 @@ export default function UniHistory() {
       <div className="table-card">
         <div className="table-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '15px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-            <h2 style={{ margin: 0, fontSize: '20px' }}>📋 University Records</h2>
+            <h2 style={{ margin: 0, fontSize: '20px' }}>University Records</h2>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
               <span className="badge badge-active">
                 Total: {filteredData.length}
@@ -186,7 +237,7 @@ export default function UniHistory() {
           {/* Filter Bar */}
           <div className="filter-bar">
             <div style={{ position: 'relative', flex: 1, minWidth: '180px' }}>
-                <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', opacity: 0.5 }}>🔍</span>
+                <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', opacity: 0.5 }}>S</span>
                 <input 
                     type="text" 
                     placeholder="Search by name or city..." 
@@ -237,7 +288,22 @@ export default function UniHistory() {
                     
                     <div className="history-info">
                       <h4>{u.name}</h4>
-                      <p>📍 {u.city || 'N/A'}, {u.state || ADMIN_COUNTRY}</p>
+                      <p>Location: {[u.city || 'N/A', u.state || ADMIN_COUNTRY].filter(Boolean).join(', ')}</p>
+                      {u.address && (
+                        <p style={{ marginTop: 2, fontSize: 12, color: 'var(--text-secondary)' }}>
+                          Address: {u.address}
+                        </p>
+                      )}
+                      {(u.testDate || u.interviewDate) && (
+                        <p style={{ marginTop: 2, fontSize: 11, color: 'var(--text-secondary)' }}>
+                          Test: {formatOptionalDate(u.testDate) || 'N/A'} | Interview: {formatOptionalDate(u.interviewDate) || 'N/A'}
+                        </p>
+                      )}
+                      {u.contact && (
+                        <p style={{ marginTop: 2, fontSize: 11, color: 'var(--text-secondary)' }}>
+                          Contact: {u.contact}
+                        </p>
+                      )}
                     </div>
 
                     <div className="history-status">
@@ -255,11 +321,11 @@ export default function UniHistory() {
                               className="btn-action-secondary"
                               onClick={() => fetchAccount(u)}
                             >
-                              🔑 Credentials
+                              Credentials
                             </button>
                           ) : (
                             <span className="badge" style={{ background: 'rgba(0,184,148,0.1)', color: '#00b894', border: '1px solid rgba(0,184,148,0.2)' }}>
-                              ✅ Assigned
+                              Assigned
                             </span>
                           )}
                         </>
@@ -270,9 +336,16 @@ export default function UniHistory() {
                       >
                         Applications
                       </button>
-                      <button className="btn-icon" onClick={() => navigate(`/universities/edit/${u._id}`)}>✏️</button>
+                      <button
+                        className="btn-action-secondary"
+                        onClick={() => handleResetCycle(u)}
+                        disabled={resettingId === u._id}
+                      >
+                        {resettingId === u._id ? 'Resetting...' : 'Reset Cycle'}
+                      </button>
+                      <button className="btn-icon" onClick={() => navigate(`/universities/edit/${u._id}`)}>Edit</button>
                       {isSuperAdmin && (
-                        <button className="btn-icon delete" onClick={() => handleDelete(u._id)}>🗑️</button>
+                        <button className="btn-icon delete" onClick={() => handleDelete(u._id)}>Delete</button>
                       )}
                     </div>
                   </div>
@@ -327,7 +400,7 @@ export default function UniHistory() {
         <div className="modal-overlay">
           <div className="modal-content" style={{ maxWidth: '420px', padding: '30px', animation: 'modalSlideUp 0.3s ease-out' }}>
             <h3 style={{ margin: '0 0 6px 0', fontSize: '18px' }}>
-              🔑 Set Admin Credentials
+              Set Admin Credentials
             </h3>
             <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: 'var(--text-secondary)' }}>
               For: <strong>{selectedUni?.name}</strong>
