@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Redirecting...</title>
+  <script>
+    (function () {
+      var loc = window.location;
+      var path = loc.pathname || '/';
+      var search = loc.search || '';
+      var hash = loc.hash || '';
+
+      // If already on hash-based route, don't loop.
+      if (hash.indexOf('#/') === 0) return;
+
+      // Convert '/login?x=1' => '/#/login?x=1'
+      var target = loc.origin + '/#' + path + search + hash;
+      loc.replace(target);
+    })();
+  </script>
+</head>
+<body>
+  <noscript>
+    This page requires JavaScript. Please open: <a href="/#/">Admin Panel</a>
+  </noscript>
+</body>
+</html>
